@@ -1,0 +1,14 @@
+/home/divyam/Desktop/projects/better-whisper/core/target/release/deps/serde-2debf337a364b18a.d: /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/divyam/Desktop/projects/better-whisper/core/target/release/build/serde-206768b153b78fd3/out/private.rs
+
+/home/divyam/Desktop/projects/better-whisper/core/target/release/deps/libserde-2debf337a364b18a.rlib: /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/divyam/Desktop/projects/better-whisper/core/target/release/build/serde-206768b153b78fd3/out/private.rs
+
+/home/divyam/Desktop/projects/better-whisper/core/target/release/deps/libserde-2debf337a364b18a.rmeta: /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/divyam/Desktop/projects/better-whisper/core/target/release/build/serde-206768b153b78fd3/out/private.rs
+
+/home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/home/divyam/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/home/divyam/Desktop/projects/better-whisper/core/target/release/build/serde-206768b153b78fd3/out/private.rs:
+
+# env-dep:OUT_DIR=/home/divyam/Desktop/projects/better-whisper/core/target/release/build/serde-206768b153b78fd3/out
