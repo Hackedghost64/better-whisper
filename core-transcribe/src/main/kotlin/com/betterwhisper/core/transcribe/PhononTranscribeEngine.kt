@@ -36,17 +36,19 @@ class PhononTranscribeEngine {
     val isModelLoaded: Boolean get() = modelHandle != 0L
 
     /**
-     * Ensures the Phonon-2 model is loaded from app filesDir or fallback directories.
-     * Safe to call from both MainActivity and FlowAccessibilityService.
+     * Ensures the Phonon-2 model is loaded from app-private storage.
+     *
+     * Only directories owned by the app are searched: `/sdcard/Download` and
+     * `/data/local/tmp` are world-writable, so loading weights from there would
+     * let another app swap in a malicious model.
      */
     @Synchronized
     fun ensureLoaded(context: Context): Boolean {
         if (modelHandle != 0L) return true
 
-        val candidateDirs = listOf(
+        val candidateDirs = listOfNotNull(
             File(context.filesDir, "phonon2"),
-            File("/data/local/tmp/phonon2"),
-            File("/sdcard/Download/phonon2")
+            context.getExternalFilesDir(null)?.let { File(it, "phonon2") }
         )
 
         for (dir in candidateDirs) {
@@ -82,7 +84,12 @@ class PhononTranscribeEngine {
             Log.w(TAG, "transcribeBuffer skipped: modelHandle=$modelHandle, pcmSize=${pcm.size}")
             return ""
         }
-        return nativeTranscribeBuffer(modelHandle, pcm)
+        return try {
+            nativeTranscribeBuffer(modelHandle, pcm)
+        } catch (t: Throwable) {
+            Log.e(TAG, "nativeTranscribeBuffer failed: ${t.message}", t)
+            ""
+        }
     }
 
     @Synchronized

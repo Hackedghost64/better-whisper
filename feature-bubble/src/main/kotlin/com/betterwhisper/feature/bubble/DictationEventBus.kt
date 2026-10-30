@@ -7,6 +7,8 @@ data class DictationEvent(
     val rawText: String,
     val cleanedText: String,
     val decodeMs: Long,
+    val injected: Boolean = true,
+    val targetPackage: String? = null,
     val timestamp: Long = System.currentTimeMillis()
 )
 

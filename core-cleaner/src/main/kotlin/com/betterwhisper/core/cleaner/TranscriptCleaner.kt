@@ -3,8 +3,11 @@ package com.betterwhisper.core.cleaner
 import android.util.Log
 
 /**
- * Module 4: High-speed (<1.5 ms) text cleaner backed by Rust libbetter_whisper_core,
- * with OpenWhispr smartSpacing and pure-Kotlin fallback so it can never crash.
+ * Module 4: text cleaner backed by the Rust `libbetter_whisper_core` fast path,
+ * with a pure-Kotlin fallback ([FlowTextCleaner]) so dictation can never crash
+ * because a native library is missing.
+ *
+ * Both paths run the same rules; [FlowTextCleaner] is the readable reference.
  */
 class TranscriptCleaner {
 
@@ -13,24 +16,18 @@ class TranscriptCleaner {
         private var nativeAvailable = false
 
         init {
-            try {
+            nativeAvailable = try {
                 System.loadLibrary("better_whisper_core")
                 System.loadLibrary("cleaner_jni")
-                nativeAvailable = true
                 Log.i(TAG, "Loaded native libbetter_whisper_core.so + libcleaner_jni.so")
+                true
             } catch (t: Throwable) {
-                nativeAvailable = false
                 Log.w(TAG, "Native cleaner unavailable, using Kotlin fallback: ${t.message}")
+                false
             }
         }
 
         val default by lazy { TranscriptCleaner() }
-
-        private val FILLER_REGEX = Regex(
-            "(?i)(?:,\\s*)?\\b(um+|uh+|er+|ah+|hmm+|hm+|you know|i mean|sort of|kind of)\\b(?:\\s*,)?"
-        )
-        private val SCRATCH_THAT_REGEX = Regex("(?i).*\\b(scratch that|never mind|delete that)\\b\\s*")
-        private val NO_WAIT_REGEX = Regex("(?i)\\b(no wait|sorry i meant|or rather)\\s+")
     }
 
     fun clean(
@@ -38,102 +35,56 @@ class TranscriptCleaner {
         contextBeforeCursor: String? = null,
         removeFillers: Boolean = true,
         deduplicateStutters: Boolean = true,
-        handleSelfCorrections: Boolean = true
+        handleSelfCorrections: Boolean = true,
+        aggressiveDiscourse: Boolean = true
     ): String {
         if (rawText.isBlank()) return ""
 
-        val cleaned = if (nativeAvailable) {
+        if (nativeAvailable) {
             try {
-                nativeClean(
+                return nativeClean(
                     rawText,
                     contextBeforeCursor,
                     removeFillers,
                     deduplicateStutters,
-                    handleSelfCorrections
+                    handleSelfCorrections,
+                    aggressiveDiscourse
                 )
             } catch (t: Throwable) {
-                Log.w(TAG, "Native clean call failed, falling back to Kotlin: ${t.message}")
-                cleanKotlinFallback(rawText, contextBeforeCursor, removeFillers, deduplicateStutters, handleSelfCorrections)
+                // A JNI failure must never cost the user their dictation.
+                Log.w(TAG, "Native clean failed, using Kotlin fallback: ${t.message}")
             }
-        } else {
-            cleanKotlinFallback(rawText, contextBeforeCursor, removeFillers, deduplicateStutters, handleSelfCorrections)
         }
 
-        return cleaned
+        val cleaned = FlowTextCleaner.clean(
+            rawText = rawText,
+            contextBeforeCursor = contextBeforeCursor,
+            removeFillers = removeFillers,
+            deduplicateStutters = deduplicateStutters,
+            handleSelfCorrections = handleSelfCorrections,
+            aggressiveDiscourse = aggressiveDiscourse
+        )
+        return FlowTextCleaner.applyDictionary(cleaned)
     }
 
-    private fun cleanKotlinFallback(
+    /** Exposed for tests and for callers that want to force the pure path. */
+    fun cleanWithFallback(
         rawText: String,
-        contextBeforeCursor: String?,
-        removeFillers: Boolean,
-        deduplicateStutters: Boolean,
-        handleSelfCorrections: Boolean
+        contextBeforeCursor: String? = null,
+        removeFillers: Boolean = true,
+        deduplicateStutters: Boolean = true,
+        handleSelfCorrections: Boolean = true,
+        aggressiveDiscourse: Boolean = true
     ): String {
-        var text = rawText.trim()
-        if (text.isEmpty()) return ""
-
-        if (handleSelfCorrections) {
-            text = text.replace(SCRATCH_THAT_REGEX, "")
-            val match = NO_WAIT_REGEX.find(text)
-            if (match != null) {
-                val beforeWords = text.substring(0, match.range.first).trim().split(Regex("\\s+")).toMutableList()
-                val after = text.substring(match.range.last + 1).trim()
-                val afterWords = after.split(Regex("\\s+"))
-                val popCount = afterWords.size.coerceAtMost(beforeWords.size).coerceAtLeast(1)
-                repeat(popCount) { if (beforeWords.isNotEmpty()) beforeWords.removeAt(beforeWords.lastIndex) }
-                text = if (beforeWords.isEmpty()) after else "${beforeWords.joinToString(" ")} $after"
-            }
-        }
-
-        if (removeFillers) {
-            text = text.replace(FILLER_REGEX, " ")
-        }
-
-        if (deduplicateStutters) {
-            val words = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
-            val out = mutableListOf<String>()
-            var i = 0
-            while (i < words.size) {
-                val curr = words[i].lowercase().trim { !it.isLetterOrDigit() }
-                val next = if (i + 1 < words.size) words[i + 1].lowercase().trim { !it.isLetterOrDigit() } else ""
-                if (curr.isNotEmpty() && curr == next) {
-                    i++
-                    continue
-                }
-                out.add(words[i])
-                i++
-            }
-            text = out.joinToString(" ")
-        }
-
-        text = text.replace(Regex("\\s+"), " ")
-            .replace(" ,", ",")
-            .replace(" .", ".")
-            .trimStart(',', ';', ' ', '.')
-            .trim()
-
-        if (text.isEmpty()) return ""
-
-        val ctx = contextBeforeCursor ?: return text.replaceFirstChar { it.uppercase() }
-        val trimmedCtx = ctx.trimEnd()
-        val shouldCapitalize = trimmedCtx.isEmpty() ||
-                trimmedCtx.endsWith(".") ||
-                trimmedCtx.endsWith("!") ||
-                trimmedCtx.endsWith("?") ||
-                trimmedCtx.endsWith("\n")
-
-        var result = if (shouldCapitalize) {
-            text.replaceFirstChar { it.uppercase() }
-        } else {
-            text.replaceFirstChar { it.lowercase() }
-        }
-
-        // OpenWhispr smartSpacing rule: ensure space between existing text and new dictation
-        if (ctx.isNotEmpty() && !ctx.endsWith(" ") && !ctx.endsWith("\n")) {
-            result = " $result"
-        }
-
-        return result
+        val cleaned = FlowTextCleaner.clean(
+            rawText = rawText,
+            contextBeforeCursor = contextBeforeCursor,
+            removeFillers = removeFillers,
+            deduplicateStutters = deduplicateStutters,
+            handleSelfCorrections = handleSelfCorrections,
+            aggressiveDiscourse = aggressiveDiscourse
+        )
+        return FlowTextCleaner.applyDictionary(cleaned)
     }
 
     private external fun nativeClean(
@@ -141,6 +92,7 @@ class TranscriptCleaner {
         contextBeforeCursor: String?,
         removeFillers: Boolean,
         dedupStutters: Boolean,
-        handleCorrections: Boolean
+        handleCorrections: Boolean,
+        aggressiveDiscourse: Boolean
     ): String
 }

@@ -1,5 +1,0 @@
-# ninja log v5
-0	1811	1793352165446005673	CMakeFiles/transcribe_jni.dir/transcribe_jni.cpp.o	e719d9491ba279f7
-1816	1878	1793352165526007116	/home/divyam/Desktop/projects/better-whisper/core-transcribe/build/intermediates/cxx/Debug/1s5h0o11/obj/arm64-v8a/libtranscribe_jni.so	1740fad68e3567b2
-12	1105	1793353616983386145	CMakeFiles/transcribe_jni.dir/transcribe_jni.cpp.o	e719d9491ba279f7
-1105	1127	1793353617009387328	/home/divyam/Desktop/projects/better-whisper/core-transcribe/build/intermediates/cxx/Debug/1s5h0o11/obj/arm64-v8a/libtranscribe_jni.so	1740fad68e3567b2

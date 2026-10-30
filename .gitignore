@@ -16,3 +16,18 @@ core-cleaner/build/
 core-transcribe/build/
 feature-bubble/build/
 *.png
+
+# Android Gradle Plugin / NDK intermediate output (was accidentally committed).
+.cxx/
+.externalNativeBuild/
+local.properties
+
+# Tool scratch state
+.devrith/
+.idea/
+.DS_Store
+
+# Release signing secrets
+keystore.properties
+*.jks
+*.keystore

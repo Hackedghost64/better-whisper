@@ -1,1 +1,0 @@
-/home/divyam/Desktop/projects/better-whisper/core-cleaner/build/intermediates/cxx/Debug/47t3f536/obj/arm64-v8a

@@ -1,16 +1,26 @@
 #include <jni.h>
+#include <cstdint>
 #include <string>
 
 extern "C" {
     char* better_whisper_clean_text(
         const char* input,
         const char* context_before_cursor,
-        bool remove_fillers,
-        bool deduplicate_stutters,
-        bool handle_self_corrections
+        int32_t remove_fillers,
+        int32_t deduplicate_stutters,
+        int32_t handle_self_corrections,
+        int32_t aggressive_discourse
     );
     void better_whisper_free_string(char* ptr);
 }
+
+namespace {
+
+jstring empty_string(JNIEnv* env) {
+    return env->NewStringUTF("");
+}
+
+} // namespace
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_betterwhisper_core_cleaner_TranscriptCleaner_nativeClean(
@@ -20,24 +30,43 @@ Java_com_betterwhisper_core_cleaner_TranscriptCleaner_nativeClean(
     jstring context_jstr,
     jboolean remove_fillers,
     jboolean dedup_stutters,
-    jboolean handle_corrections
+    jboolean handle_corrections,
+    jboolean aggressive_discourse
 ) {
-    if (!raw_text_jstr) {
-        return env->NewStringUTF("");
+    if (raw_text_jstr == nullptr) {
+        return empty_string(env);
     }
 
     const char* raw_text = env->GetStringUTFChars(raw_text_jstr, nullptr);
-    const char* context = context_jstr ? env->GetStringUTFChars(context_jstr, nullptr) : nullptr;
+    if (raw_text == nullptr) {
+        // OOM: GetStringUTFChars already raised OutOfMemoryError.
+        return nullptr;
+    }
+
+    const char* context = nullptr;
+    if (context_jstr != nullptr) {
+        context = env->GetStringUTFChars(context_jstr, nullptr);
+        if (context == nullptr) {
+            env->ReleaseStringUTFChars(raw_text_jstr, raw_text);
+            return nullptr;
+        }
+    }
 
     char* cleaned = better_whisper_clean_text(
         raw_text,
         context,
-        remove_fillers,
-        dedup_stutters,
-        handle_corrections
+        remove_fillers ? 1 : 0,
+        dedup_stutters ? 1 : 0,
+        handle_corrections ? 1 : 0,
+        aggressive_discourse ? 1 : 0
     );
 
-    jstring result = env->NewStringUTF(cleaned ? cleaned : raw_text);
+    // Fall back to the untouched transcript rather than losing the utterance.
+    const char* out = cleaned ? cleaned : raw_text;
+    jstring result = empty_string(env);
+    if (out != nullptr) {
+        result = env->NewStringUTF(out);
+    }
 
     if (cleaned) {
         better_whisper_free_string(cleaned);

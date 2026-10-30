@@ -1,3 +1,0 @@
-/home/divyam/Desktop/projects/better-whisper/core-transcribe/.cxx/Debug/1s5h0o11/arm64-v8a/CMakeFiles/transcribe_jni.dir
-/home/divyam/Desktop/projects/better-whisper/core-transcribe/.cxx/Debug/1s5h0o11/arm64-v8a/CMakeFiles/edit_cache.dir
-/home/divyam/Desktop/projects/better-whisper/core-transcribe/.cxx/Debug/1s5h0o11/arm64-v8a/CMakeFiles/rebuild_cache.dir

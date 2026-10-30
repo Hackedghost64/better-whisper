@@ -1,104 +1,106 @@
 #!/usr/bin/env bash
+# Better Whisper — Android asset setup.
+#
+# Downloads the Phonon-2 English weights (Android build) and wires the real
+# libphonon C library into the Gradle modules. Android only: the iOS/CoreML
+# target has been archived (see archive/ios) and is no longer built.
 set -euo pipefail
 
-# Better Whisper — Model Download & Setup Script
-# Downloads Phonon-2 weights (164 MB), CoreML bundle for iOS, and Android NDK engine artifacts.
-
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${BASE_DIR}/.." && pwd)"
 WEIGHTS_DIR="${BASE_DIR}/weights"
+
+PHONON_REPO="https://huggingface.co/FermionResearch/Phonon-2"
+PHONON_ARCHIVE="phonon-2.bps.tar.zst"
+MODEL_DIR="${WEIGHTS_DIR}/phonon2"
+
+SDK_DIR="${BASE_DIR}/android-sdk/libphonon-1.1.0-android-arm64-v8a"
+TRANSCRIBE_JNI_DIR="${PROJECT_ROOT}/core-transcribe/src/main/jniLibs/arm64-v8a"
+CLEANER_JNI_DIR="${PROJECT_ROOT}/core-cleaner/src/main/jniLibs/arm64-v8a"
+NDK_ABI="arm64-v8a"
+
+echo "=========================================================="
+echo " Better Whisper: Android asset setup"
+echo "=========================================================="
+
 mkdir -p "${WEIGHTS_DIR}"
 
-echo "=========================================================="
-echo " Better Whisper: Downloading Phonon-2 Assets (~164 MB)"
-echo "=========================================================="
-
-# 1. Main Phonon-2 Quantized Weights (model.fermion)
-PHONON_MODEL_URL="https://huggingface.co/FermionResearch/Phonon-2/resolve/main/model.fermion"
-if [ ! -f "${WEIGHTS_DIR}/model.fermion" ]; then
-    echo "--> Downloading Phonon-2 model.fermion..."
-    curl -L --progress-bar "${PHONON_MODEL_URL}" -o "${WEIGHTS_DIR}/model.fermion"
-    echo "    Saved to ${WEIGHTS_DIR}/model.fermion"
+# 1. Phonon-2 weights -------------------------------------------------------
+if [ -f "${MODEL_DIR}/model.fermion" ] && [ -f "${MODEL_DIR}/config.json" ]; then
+    echo "--> Phonon-2 weights already extracted in ${MODEL_DIR}"
 else
-    echo "--> Phonon-2 model.fermion already exists. Skipping."
+    ARCHIVE_PATH="${WEIGHTS_DIR}/${PHONON_ARCHIVE}"
+    if [ ! -f "${ARCHIVE_PATH}" ]; then
+        echo "--> Downloading ${PHONON_ARCHIVE} (~160 MB)..."
+        curl -L --fail --progress-bar \
+            "${PHONON_REPO}/resolve/main/${PHONON_ARCHIVE}" \
+            -o "${ARCHIVE_PATH}"
+    fi
+
+    echo "--> Extracting weights..."
+    mkdir -p "${MODEL_DIR}"
+    # The release archive is flat (bps_manifest.json, config.json, model.fermion).
+    if command -v zstd >/dev/null 2>&1; then
+        tar -I zstd -xf "${ARCHIVE_PATH}" -C "${MODEL_DIR}"
+    else
+        # bsdtar (macOS / Windows) understands zstd natively.
+        tar -xf "${ARCHIVE_PATH}" -C "${MODEL_DIR}"
+    fi
+
+    if [ ! -f "${MODEL_DIR}/model.fermion" ] || [ ! -f "${MODEL_DIR}/config.json" ]; then
+        echo "ERROR: extraction did not produce model.fermion + config.json." >&2
+        echo "       Install zstd (apt install zstd) and re-run." >&2
+        exit 1
+    fi
 fi
 
-# 2. Phonon-2 CoreML bundle for iOS / Apple Neural Engine
-COREML_ZIP_URL="https://huggingface.co/FermionResearch/Phonon-2-CoreML/resolve/main/Phonon-2-CoreML.zip"
-if [ ! -d "${WEIGHTS_DIR}/Phonon-2-CoreML" ] && [ ! -f "${WEIGHTS_DIR}/Phonon-2-CoreML.zip" ]; then
-    echo "--> Downloading Phonon-2-CoreML for Apple Neural Engine (iOS/macOS)..."
-    curl -L --progress-bar "${COREML_ZIP_URL}" -o "${WEIGHTS_DIR}/Phonon-2-CoreML.zip" || {
-        echo "    Note: CoreML zip may require Hugging Face clone or git lfs if direct zip unavailable."
-    }
-    if [ -f "${WEIGHTS_DIR}/Phonon-2-CoreML.zip" ]; then
-        unzip -q "${WEIGHTS_DIR}/Phonon-2-CoreML.zip" -d "${WEIGHTS_DIR}/" || true
+# 2. libphonon.so + header --------------------------------------------------
+if [ ! -f "${SDK_DIR}/lib/libphonon.so" ]; then
+    if [ -f "${BASE_DIR}/android-sdk/libphonon.tar.gz" ]; then
+        echo "--> Extracting prebuilt libphonon SDK..."
+        tar -xzf "${BASE_DIR}/android-sdk/libphonon.tar.gz" -C "${BASE_DIR}/android-sdk"
+    else
+        echo "ERROR: ${SDK_DIR}/lib/libphonon.so is missing." >&2
+        echo "       Download the phonon android-arm64-v8a release into ${BASE_DIR}/android-sdk/." >&2
+        exit 1
+    fi
+fi
+
+mkdir -p "${TRANSCRIBE_JNI_DIR}"
+cp "${SDK_DIR}/lib/libphonon.so" "${TRANSCRIBE_JNI_DIR}/libphonon.so"
+# Keep the checked-in header identical to the ABI of the shipped .so.
+cp "${SDK_DIR}/include/phonon.h" "${PROJECT_ROOT}/core-transcribe/src/main/cpp/phonon.h"
+
+# 3. Rust cleaner -----------------------------------------------------------
+if command -v cargo >/dev/null 2>&1; then
+    echo "--> Building libbetter_whisper_core.so for Android ${NDK_ABI}..."
+    : "${ANDROID_NDK_HOME:=${ANDROID_HOME:-$HOME/Android/Sdk}/ndk/27.0.12077973}"
+    LINKER="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+    if [ -x "${LINKER}" ]; then
+        rustup target add aarch64-linux-android >/dev/null 2>&1 || true
+        (
+            cd "${PROJECT_ROOT}/core"
+            CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${LINKER}" \
+                cargo build --release --target aarch64-linux-android
+        )
+        mkdir -p "${CLEANER_JNI_DIR}"
+        cp "${PROJECT_ROOT}/core/target/aarch64-linux-android/release/libbetter_whisper_core.so" \
+            "${CLEANER_JNI_DIR}/libbetter_whisper_core.so"
+    else
+        echo "WARNING: NDK clang not found at ${LINKER}; skipping Rust cross-build." >&2
     fi
 else
-    echo "--> Phonon-2-CoreML already present."
+    echo "WARNING: cargo not found; skipping Rust cross-build." >&2
 fi
 
-# 3. Android NDK Pre-built Libraries & C Headers
-NDK_DIR="${BASE_DIR}/android-ndk"
-mkdir -p "${NDK_DIR}"
-echo "--> Setting up Phonon C-API headers..."
-cat << 'EOF' > "${NDK_DIR}/phonon.h"
-#ifndef PHONON_H
-#define PHONON_H
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#include <stdint.h>
-#include <stddef.h>
-
-typedef struct PhononModel PhononModel;
-
-typedef struct {
-    char* text;
-    float start_time;
-    float end_time;
-    float confidence;
-} PhononWord;
-
-typedef struct {
-    char* full_transcript;
-    PhononWord* words;
-    size_t num_words;
-} PhononResult;
-
-/**
- * Initializes the Phonon-2 model from a given binary path.
- * Uses mmap internally for near-instant cold loads and shared memory efficiency.
- */
-PhononModel* phonon_init(const char* model_path);
-
-/**
- * Transcribes raw 16 kHz 32-bit float mono PCM audio.
- * @param model Initialized model instance
- * @param audio_pcm Array of float samples [-1.0, 1.0] at 16000 Hz
- * @param num_samples Number of samples in audio_pcm
- * @return PhononResult struct containing text and word-level timestamps
- */
-PhononResult* phonon_transcribe(PhononModel* model, const float* audio_pcm, size_t num_samples);
-
-/**
- * Frees memory allocated by a PhononResult.
- */
-void phonon_free_result(PhononResult* result);
-
-/**
- * Destroys the model and unmaps weights.
- */
-void phonon_destroy(PhononModel* model);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif // PHONON_H
-EOF
-
-echo "    Created ${NDK_DIR}/phonon.h"
+echo
 echo "=========================================================="
-echo " Model setup complete!"
+echo " Assets ready."
+echo
+echo " Next: install the app, then push the weights to app-private"
+echo " external storage (no root needed):"
+echo
+echo "   adb install -r app/build/outputs/apk/debug/app-debug.apk"
+echo "   adb shell mkdir -p /sdcard/Android/data/com.betterwhisper/files/phonon2"
+echo "   adb push ${MODEL_DIR}/. /sdcard/Android/data/com.betterwhisper/files/phonon2/"
 echo "=========================================================="

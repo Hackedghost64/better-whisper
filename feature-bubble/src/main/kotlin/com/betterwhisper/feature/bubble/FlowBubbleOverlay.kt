@@ -1,108 +1,218 @@
 package com.betterwhisper.feature.bubble
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.AnimatorSet
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.PixelFormat
+import android.os.Build
 import android.util.Log
-import android.view.*
+import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewConfiguration
+import android.view.WindowInsets
+import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.ImageButton
 import com.betterwhisper.core.audio.AudioCaptureEngine
 import com.betterwhisper.core.transcribe.PhononTranscribeEngine
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
-import kotlin.math.abs
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+/**
+ * The floating Flow bubble.
+ *
+ * State is an explicit [Mode] instead of a set of booleans, and placement math
+ * lives in [BubblePlacement]. The service treats [isBusy] as a hard guard: it
+ * never removes the window while the user is touching it, snapping it, or
+ * recording/transcribing. That removes the "bubble disappears mid-gesture and
+ * the next tap goes nowhere" failure mode.
+ */
 class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
+
+    private enum class Mode { COLLAPSED, RECORDING, TRANSCRIBING }
 
     companion object {
         private const val TAG = "FlowBubbleOverlay"
+        private const val SNAP_DURATION_MS = 200L
+        private const val KEYBOARD_SNAP_DURATION_MS = 160L
     }
 
     private val windowManager = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val density = service.resources.displayMetrics.density
+
+    private val sideMarginPx = (14 * density).toInt()
+    private val collapsedWidthPx = (50 * density).toInt()
+    private val expandedWidthPx = (196 * density).toInt()
+    private val bubbleHeightPx = (52 * density).toInt()
+    private val topGuardPx = (8 * density).toInt()
+    private val bottomGuardPx = (96 * density).toInt()
+
+    private var viewport = BubbleViewport(0, 0, sideMarginPx, topGuardPx, bottomGuardPx)
+
+    private var mode = Mode.COLLAPSED
+    private var isUserInteracting = false
+    private var isSnapping = false
+    private var isDockedOnRight = true
+    private var currentImeHeightPx = 0
+    private var preferredUserY = (340 * density).toInt()
+    private var recordingPackage: String? = null
+
+    private var dragStartX = 0
+    private var dragStartY = 0
+
     private var bubbleView: View? = null
-    private var isExpanded = false
-    private var isTranscribing = false
+    private var attached = false
+    private var containerCollapsed: View? = null
+    private var containerExpanded: View? = null
+    private var btnClose: ImageButton? = null
+    private var btnDone: ImageButton? = null
+    private var visualizerBars: List<View> = emptyList()
+    private var visualizerJob: Job? = null
+    private var snapAnimator: AnimatorSet? = null
 
     private val audioEngine = AudioCaptureEngine()
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private var visualizerJob: Job? = null
-
-    private lateinit var containerCollapsed: View
-    private lateinit var containerExpanded: View
-    private lateinit var btnClose: ImageButton
-    private lateinit var btnDone: ImageButton
-    private lateinit var visualizerBars: List<View>
-
-    private val density = service.resources.displayMetrics.density
-    private val sideMarginPx = (14 * density).toInt()
-
-    // Screen dimensions
-    private val screenWidthPx = service.resources.displayMetrics.widthPixels
-    private val screenHeightPx = service.resources.displayMetrics.heightPixels
-
-    // Layout dimension estimates
-    private val collapsedWidthPx = (50 * density).toInt()
-    private val expandedWidthPx = (196 * density).toInt()
-
-    // Keyboard state
-    private var currentImeHeightPx = 0
-    private var isDockedOnRight = true
-
-    // Resting vertical offset above keyboard or navigation bar
-    private var preferredUserY = (340 * density).toInt()
-
-    private var xAnimator: ValueAnimator? = null
-    private var yAnimator: ValueAnimator? = null
 
     private val layoutParams = WindowManager.LayoutParams().apply {
         type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
         format = PixelFormat.TRANSLUCENT
         flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
         gravity = Gravity.BOTTOM or Gravity.START
-        x = screenWidthPx - collapsedWidthPx - sideMarginPx
-        y = (340 * density).toInt()
         width = WindowManager.LayoutParams.WRAP_CONTENT
         height = WindowManager.LayoutParams.WRAP_CONTENT
     }
 
-    fun isExpanded(): Boolean = isExpanded || isTranscribing
+    init {
+        refreshViewport()
+        layoutParams.x = viewport.dockedX(isDockedOnRight, collapsedWidthPx)
+        layoutParams.y = viewport.clampY(preferredUserY, currentImeHeightPx, bubbleHeightPx)
+        preferredUserY = layoutParams.y
+    }
 
-    fun show(keyboardTopFromBottomPx: Int? = null) {
-        if (keyboardTopFromBottomPx != null && keyboardTopFromBottomPx > 0) {
-            currentImeHeightPx = keyboardTopFromBottomPx
+    fun isExpanded(): Boolean = mode != Mode.COLLAPSED
+
+    /** True while a gesture, snap animation, recording, or decode is active. */
+    fun isBusy(): Boolean = isUserInteracting || isSnapping || mode != Mode.COLLAPSED
+
+    fun show(imeHeightPx: Int = 0) {
+        if (currentImeHeightPx != imeHeightPx) {
+            currentImeHeightPx = imeHeightPx.coerceAtLeast(0)
         }
+        refreshViewport()
 
-        val minSafeY = getMinSafeY()
-        val targetY = preferredUserY.coerceAtLeast(minSafeY)
-            .coerceAtMost(screenHeightPx - (120 * density).toInt())
-        layoutParams.y = targetY
-
-        val currentW = if (isExpanded) expandedWidthPx else collapsedWidthPx
-        layoutParams.x = if (isDockedOnRight) {
-            screenWidthPx - currentW - sideMarginPx
-        } else {
-            sideMarginPx
-        }
-
-        if (bubbleView != null) {
-            try {
-                windowManager.updateViewLayout(bubbleView, layoutParams)
-            } catch (_: Exception) {}
+        if (mode != Mode.COLLAPSED) {
+            updateKeyboardHeight(currentImeHeightPx)
             return
         }
+        if (isUserInteracting || isSnapping) return
 
-        val inflater = LayoutInflater.from(service)
-        val view = inflater.inflate(R.layout.layout_flow_bubble, null)
-        bubbleView = view
+        val targetY = viewport.clampY(preferredUserY, currentImeHeightPx, bubbleHeightPx)
+        preferredUserY = targetY
+        layoutParams.x = viewport.dockedX(isDockedOnRight, collapsedWidthPx)
+        layoutParams.y = targetY
 
+        ensureAttached()
+        safeUpdateLayout()
+    }
+
+    fun updateKeyboardHeight(imeHeightPx: Int) {
+        val newHeight = imeHeightPx.coerceAtLeast(0)
+        if (currentImeHeightPx == newHeight) return
+        currentImeHeightPx = newHeight
+        if (bubbleView == null) return
+
+        val targetY = viewport.clampY(preferredUserY, currentImeHeightPx, bubbleHeightPx)
+        preferredUserY = targetY
+        if (isUserInteracting || isSnapping) return
+
+        val width = if (mode == Mode.COLLAPSED) collapsedWidthPx else expandedWidthPx
+        val targetX = viewport.dockedX(isDockedOnRight, width)
+        if (targetX != layoutParams.x || targetY != layoutParams.y) {
+            animateSnap(targetX, targetY, KEYBOARD_SNAP_DURATION_MS)
+        }
+    }
+
+    /** Returns false when the bubble is busy and must not be removed yet. */
+    fun hide(): Boolean {
+        if (isBusy()) return false
+        cancelAnimations()
+        mode = Mode.COLLAPSED
+        detachView()
+        return true
+    }
+
+    fun forceHide() {
+        cancelAnimations()
+        isUserInteracting = false
+        recordingPackage = null
+        mode = Mode.COLLAPSED
+        detachView()
+    }
+
+    fun onDestroy() {
+        visualizerJob?.cancel()
+        visualizerJob = null
+        scope.cancel()
+        audioEngine.release()
+        forceHide()
+    }
+
+    private fun refreshViewport() {
+        val width: Int
+        val height: Int
+        val navigationInset: Int
+        val statusInset: Int
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = windowManager.currentWindowMetrics
+            val insets = metrics.windowInsets
+            width = metrics.bounds.width()
+            height = metrics.bounds.height()
+            navigationInset = insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars()).bottom
+            statusInset = insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars()).top
+        } else {
+            val metrics = service.resources.displayMetrics
+            width = metrics.widthPixels
+            height = metrics.heightPixels
+            navigationInset = 0
+            statusInset = statusBarHeightFallback()
+        }
+
+        viewport = BubbleViewport(
+            screenWidthPx = width,
+            screenHeightPx = height,
+            sideMarginPx = sideMarginPx,
+            topInsetPx = statusInset + topGuardPx,
+            bottomInsetPx = bottomGuardPx + navigationInset
+        )
+    }
+
+    private fun statusBarHeightFallback(): Int {
+        val id = service.resources.getIdentifier("status_bar_height", "dimen", "android")
+        return if (id > 0) service.resources.getDimensionPixelSize(id) else (24 * density).toInt()
+    }
+
+    private fun ensureAttached() {
+        val current = bubbleView
+        if (current != null && attached && current.isAttachedToWindow) return
+        detachView()
+
+        val view = LayoutInflater.from(service).inflate(R.layout.layout_flow_bubble, null)
         containerCollapsed = view.findViewById(R.id.container_collapsed)
         containerExpanded = view.findViewById(R.id.container_expanded)
         btnClose = view.findViewById(R.id.btn_close)
         btnDone = view.findViewById(R.id.btn_done)
-
         visualizerBars = listOf(
             view.findViewById(R.id.bar_1),
             view.findViewById(R.id.bar_2),
@@ -111,222 +221,191 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
             view.findViewById(R.id.bar_5)
         )
 
-        setupSideDockingDraggable(containerCollapsed)
+        val dragController = BubbleDragController(
+            touchSlopPx = ViewConfiguration.get(service).scaledTouchSlop,
+            onGestureStart = {
+                cancelAnimations()
+                isUserInteracting = true
+                dragStartX = layoutParams.x
+                dragStartY = layoutParams.y
+            },
+            onDrag = ::onDrag,
+            onGestureEnd = ::onGestureEnd
+        )
+        containerCollapsed?.setOnTouchListener(dragController)
+        btnClose?.setOnClickListener { cancelAndCollapse() }
+        btnDone?.setOnClickListener { finishAndInject() }
 
-        btnClose.setOnClickListener {
-            cancelAndCollapse()
-        }
-
-        btnDone.setOnClickListener {
-            finishAndInject()
-        }
-
+        bubbleView = view
         try {
             windowManager.addView(view, layoutParams)
-            Log.i(TAG, "Flow bubble overlay shown at x=${layoutParams.x}, y=${layoutParams.y}")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to add Flow bubble view: ${e.message}", e)
+            attached = true
+        } catch (t: RuntimeException) {
+            Log.e(TAG, "Unable to attach Flow bubble: ${t.message}", t)
+            bubbleView = null
+            attached = false
+            containerCollapsed = null
+            containerExpanded = null
         }
     }
 
-    private fun getMinSafeY(): Int {
-        return if (currentImeHeightPx > (100 * density).toInt()) {
-            currentImeHeightPx + (16 * density).toInt()
-        } else {
-            (48 * density).toInt()
-        }
+    private fun onDrag(dx: Int, dy: Int) {
+        if (bubbleView == null) return
+        // The window is BOTTOM-gravity, so `y` grows upward: a finger moving
+        // down (positive dy) must *decrease* y. The old code got this right
+        // only because it inverted rawY before reporting the delta.
+        val newX = viewport.clampX(dragStartX + dx, collapsedWidthPx)
+        val newY = viewport.clampY(dragStartY - dy, currentImeHeightPx, bubbleHeightPx)
+        layoutParams.x = newX
+        layoutParams.y = newY
+        preferredUserY = newY
+        safeUpdateLayout()
     }
 
-    /**
-     * Responds immediately when a keyboard opens or closes:
-     * - If keyboard opens: pushes bubble up above the keyboard.
-     * - If keyboard closes: lowers bubble back down while respecting side-docking.
-     */
-    fun updateKeyboardHeight(imeHeightPx: Int) {
-        currentImeHeightPx = imeHeightPx
-        val minSafeY = getMinSafeY()
-        val targetY = preferredUserY.coerceAtLeast(minSafeY)
-            .coerceAtMost(screenHeightPx - (120 * density).toInt())
+    private fun onGestureEnd(dragged: Boolean, cancelled: Boolean) {
+        isUserInteracting = false
+        if (bubbleView == null) return
 
-        if (layoutParams.y != targetY) {
-            animateY(targetY)
+        if (!dragged && !cancelled) {
+            expandAndStartDictation()
+            return
         }
+
+        // A drag, a multi-touch handoff, or an IME window change cancelled the
+        // gesture. Snap back to a legal edge instead of leaving it mid-screen.
+        snapToEdge(SNAP_DURATION_MS)
     }
 
-    private fun animateY(targetY: Int) {
-        yAnimator?.cancel()
-        val startY = layoutParams.y
-        if (bubbleView == null || startY == targetY) {
+    private fun snapToEdge(durationMs: Long = SNAP_DURATION_MS, widthPx: Int = -1) {
+        if (bubbleView == null) return
+        val width = when {
+            widthPx > 0 -> widthPx
+            mode == Mode.COLLAPSED -> collapsedWidthPx
+            else -> expandedWidthPx
+        }
+        isDockedOnRight = viewport.shouldDockRight(layoutParams.x, width)
+        val targetX = viewport.dockedX(isDockedOnRight, width)
+        val targetY = viewport.clampY(preferredUserY, currentImeHeightPx, bubbleHeightPx)
+        animateSnap(targetX, targetY, durationMs)
+    }
+
+    private fun animateSnap(targetX: Int, targetY: Int, durationMs: Long) {
+        cancelAnimations()
+        if (bubbleView == null) {
+            layoutParams.x = targetX
             layoutParams.y = targetY
             return
         }
 
-        yAnimator = ValueAnimator.ofInt(startY, targetY).apply {
-            duration = 200
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { anim ->
-                layoutParams.y = anim.animatedValue as Int
-                try {
-                    if (bubbleView != null) {
-                        windowManager.updateViewLayout(bubbleView, layoutParams)
-                    }
-                } catch (_: Exception) {}
-            }
-            start()
-        }
-    }
-
-    private fun animateX(targetX: Int) {
-        xAnimator?.cancel()
         val startX = layoutParams.x
-        if (bubbleView == null || startX == targetX) {
-            layoutParams.x = targetX
+        val startY = layoutParams.y
+        if (startX == targetX && startY == targetY) {
+            safeUpdateLayout()
             return
         }
 
-        xAnimator = ValueAnimator.ofInt(startX, targetX).apply {
-            duration = 220
-            interpolator = OvershootInterpolator(1.15f)
-            addUpdateListener { anim ->
-                layoutParams.x = anim.animatedValue as Int
-                try {
-                    if (bubbleView != null) {
-                        windowManager.updateViewLayout(bubbleView, layoutParams)
-                    }
-                } catch (_: Exception) {}
+        val xAnimator = ValueAnimator.ofInt(startX, targetX).apply {
+            addUpdateListener {
+                layoutParams.x = it.animatedValue as Int
+                safeUpdateLayout()
             }
-            start()
+        }
+        val yAnimator = ValueAnimator.ofInt(startY, targetY).apply {
+            addUpdateListener {
+                layoutParams.y = it.animatedValue as Int
+                safeUpdateLayout()
+            }
+        }
+
+        val set = AnimatorSet().apply {
+            playTogether(xAnimator, yAnimator)
+            this.duration = durationMs
+            interpolator = DecelerateInterpolator()
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (snapAnimator !== animation) return
+                    layoutParams.x = targetX
+                    layoutParams.y = targetY
+                    safeUpdateLayout()
+                    isSnapping = false
+                    snapAnimator = null
+                }
+
+                override fun onAnimationCancel(animation: Animator) {
+                    if (snapAnimator === animation) {
+                        isSnapping = false
+                        snapAnimator = null
+                    }
+                }
+            })
+        }
+        snapAnimator = set
+        isSnapping = true
+        set.start()
+    }
+
+    private fun cancelAnimations() {
+        val animator = snapAnimator
+        snapAnimator = null
+        isSnapping = false
+        animator?.cancel()
+    }
+
+    private fun safeUpdateLayout() {
+        val view = bubbleView ?: return
+        if (!view.isAttachedToWindow) {
+            attached = false
+            return
+        }
+        try {
+            windowManager.updateViewLayout(view, layoutParams)
+        } catch (t: RuntimeException) {
+            // A detached window or an IME transition can invalidate the token.
+            // Do not swallow this silently: mark the view as detached so the
+            // next show() re-attaches it instead of animating a ghost.
+            Log.e(TAG, "updateViewLayout failed: ${t.message}", t)
+            attached = false
         }
     }
 
-    /**
-     * Side-docking gesture handler:
-     * - User can freely drag UP, DOWN, LEFT, RIGHT.
-     * - Bubble NEVER stays in the middle: upon touch release, it cleanly snaps
-     *   to the nearest edge (Left or Right side).
-     */
-    private fun setupSideDockingDraggable(view: View) {
-        var startTouchRawX = 0f
-        var startTouchRawY = 0f
-        var initialBubbleX = 0
-        var initialBubbleY = 0
-        var isDragging = false
-
-        view.setOnTouchListener { v, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    xAnimator?.cancel()
-                    yAnimator?.cancel()
-                    startTouchRawX = event.rawX
-                    startTouchRawY = event.rawY
-                    initialBubbleX = layoutParams.x
-                    initialBubbleY = layoutParams.y
-                    isDragging = false
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - startTouchRawX).toInt()
-                    val dy = (startTouchRawY - event.rawY).toInt()
-
-                    if (abs(dx) > (8 * density) || abs(dy) > (8 * density)) {
-                        isDragging = true
-                        val minSafeY = getMinSafeY()
-                        val maxSafeY = screenHeightPx - (120 * density).toInt()
-
-                        val newY = (initialBubbleY + dy).coerceIn(minSafeY, maxSafeY)
-                        val newX = (initialBubbleX + dx).coerceIn(
-                            sideMarginPx,
-                            screenWidthPx - collapsedWidthPx - sideMarginPx
-                        )
-
-                        layoutParams.x = newX
-                        layoutParams.y = newY
-                        preferredUserY = newY
-
-                        try {
-                            if (bubbleView != null) {
-                                windowManager.updateViewLayout(bubbleView, layoutParams)
-                            }
-                        } catch (_: Exception) {}
-                    }
-                    true
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (!isDragging) {
-                        v.performClick()
-                        expandAndStartDictation()
-                    } else {
-                        // Snap strictly to closest side (Left or Right) - Never stays in the middle
-                        val bubbleCenterX = layoutParams.x + (collapsedWidthPx / 2)
-                        val isRightSide = bubbleCenterX >= (screenWidthPx / 2f)
-                        isDockedOnRight = isRightSide
-
-                        val targetX = if (isRightSide) {
-                            screenWidthPx - collapsedWidthPx - sideMarginPx
-                        } else {
-                            sideMarginPx
-                        }
-                        animateX(targetX)
-
-                        val minSafeY = getMinSafeY()
-                        val maxSafeY = screenHeightPx - (120 * density).toInt()
-                        val targetY = layoutParams.y.coerceIn(minSafeY, maxSafeY)
-                        if (targetY != layoutParams.y) {
-                            animateY(targetY)
-                        }
-                    }
-                    true
-                }
-                else -> false
+    private fun detachView() {
+        val view = bubbleView ?: return
+        try {
+            if (view.isAttachedToWindow) {
+                windowManager.removeView(view)
             }
+        } catch (t: RuntimeException) {
+            Log.w(TAG, "removeView failed: ${t.message}")
         }
-    }
-
-    fun hide() {
-        if (isExpanded) {
-            cancelAndCollapse()
-        }
-        bubbleView?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Exception) {}
-            bubbleView = null
-        }
+        bubbleView = null
+        attached = false
+        containerCollapsed = null
+        containerExpanded = null
+        btnClose = null
+        btnDone = null
+        visualizerBars = emptyList()
     }
 
     private fun expandAndStartDictation() {
-        if (isExpanded || isTranscribing) return
-        isExpanded = true
+        if (mode != Mode.COLLAPSED || bubbleView == null) return
+        cancelAnimations()
+        mode = Mode.RECORDING
+        // Remember where the user started dictating. If they switch apps while
+        // the microphone is open we must not type into the new app.
+        recordingPackage = service.currentFocusPackage()
+        showExpandedUi()
 
-        containerCollapsed.visibility = View.GONE
-        containerExpanded.visibility = View.VISIBLE
+        val targetX = viewport.dockedX(isDockedOnRight, expandedWidthPx)
+        val targetY = viewport.clampY(preferredUserY, currentImeHeightPx, bubbleHeightPx)
+        animateSnap(targetX, targetY, SNAP_DURATION_MS)
 
-        val targetX = if (isDockedOnRight) {
-            screenWidthPx - expandedWidthPx - sideMarginPx
-        } else {
-            sideMarginPx
-        }
-        animateX(targetX)
-
-        containerExpanded.scaleX = 0.75f
-        containerExpanded.scaleY = 0.75f
-        containerExpanded.animate()
-            .scaleX(1.0f)
-            .scaleY(1.0f)
-            .setDuration(220)
-            .setInterpolator(OvershootInterpolator(1.15f))
-            .start()
-
-        // 1. Start audio capture (Module 2) - Manual stop only (never auto-stops on pauses)
-        val started = audioEngine.startCapture()
-
-        if (!started) {
+        if (!audioEngine.startCapture()) {
             Log.e(TAG, "Failed to start audio capture")
             cancelAndCollapse()
             return
         }
 
-        // 2. Drive the small audio visualizer
+        visualizerJob?.cancel()
         visualizerJob = scope.launch {
             audioEngine.visualizerLevels.collectLatest { levels ->
                 updateVisualizerBars(levels)
@@ -334,85 +413,101 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
         }
     }
 
-    private fun updateVisualizerBars(levels: FloatArray) {
-        val minHeightPx = (4 * density).toInt()
-        val maxHeightPx = (24 * density).toInt()
-
-        for (i in visualizerBars.indices) {
-            val bar = visualizerBars[i]
-            val level = if (i < levels.size) levels[i] else 0.12f
-            val targetHeight = (minHeightPx + (maxHeightPx - minHeightPx) * level).toInt()
-
-            val lp = bar.layoutParams
-            lp.height = targetHeight
-            bar.layoutParams = lp
-        }
-    }
-
     private fun cancelAndCollapse() {
-        if (!isExpanded) return
-        isExpanded = false
-
+        if (mode == Mode.COLLAPSED) return
+        mode = Mode.COLLAPSED
+        recordingPackage = null
         visualizerJob?.cancel()
+        visualizerJob = null
         audioEngine.stopAndGetPcm()
-
-        containerExpanded.visibility = View.GONE
-        containerCollapsed.visibility = View.VISIBLE
-
-        val targetX = if (isDockedOnRight) {
-            screenWidthPx - collapsedWidthPx - sideMarginPx
-        } else {
-            sideMarginPx
-        }
-        animateX(targetX)
+        showCollapsedUi()
+        snapToEdge(SNAP_DURATION_MS)
+        service.onDictationFinished()
     }
 
     private fun finishAndInject() {
-        if (!isExpanded || isTranscribing) return
-        isExpanded = false
-        isTranscribing = true
-
+        if (mode != Mode.RECORDING) return
+        mode = Mode.TRANSCRIBING
         visualizerJob?.cancel()
+        visualizerJob = null
+
+        // Snapshot the target now: the user may switch apps while the model
+        // decodes, and the transcript must land where dictation started.
+        val targetPackage = recordingPackage
+        recordingPackage = null
+
         val pcmSamples = audioEngine.stopAndGetPcm()
-
-        containerExpanded.visibility = View.GONE
-        containerCollapsed.visibility = View.VISIBLE
-
-        val targetX = if (isDockedOnRight) {
-            screenWidthPx - collapsedWidthPx - sideMarginPx
-        } else {
-            sideMarginPx
-        }
-        animateX(targetX)
+        showCollapsedUi()
+        // The window is visually collapsed now, so dock with the collapsed
+        // width (using the expanded width left it inset from the edge).
+        snapToEdge(SNAP_DURATION_MS, collapsedWidthPx)
 
         if (pcmSamples.isEmpty()) {
-            isTranscribing = false
+            finishTranscription()
             return
         }
 
         scope.launch(Dispatchers.IO) {
             try {
                 PhononTranscribeEngine.instance.ensureLoaded(service.applicationContext)
-                val t0 = System.currentTimeMillis()
+                val startedAt = System.currentTimeMillis()
                 val rawTranscript = PhononTranscribeEngine.instance.transcribeBuffer(pcmSamples)
-                val decodeMs = System.currentTimeMillis() - t0
+                val decodeMs = System.currentTimeMillis() - startedAt
                 Log.i(TAG, "Phonon-2 decoded in ${decodeMs}ms: \"$rawTranscript\"")
 
                 if (rawTranscript.isNotBlank()) {
                     withContext(Dispatchers.Main) {
-                        service.injectTextIntoFocusedField(rawTranscript, decodeMs)
+                        service.injectTextIntoFocusedField(rawTranscript, decodeMs, targetPackage)
                     }
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "Transcription error: ${t.message}", t)
             } finally {
-                isTranscribing = false
+                withContext(Dispatchers.Main) {
+                    finishTranscription()
+                }
             }
         }
     }
 
-    fun onDestroy() {
-        hide()
-        scope.cancel()
+    private fun finishTranscription() {
+        mode = Mode.COLLAPSED
+        service.onDictationFinished()
+    }
+
+    private fun showExpandedUi() {
+        containerCollapsed?.visibility = View.GONE
+        containerExpanded?.visibility = View.VISIBLE
+        containerExpanded?.let { view ->
+            view.animate().cancel()
+            view.scaleX = 0.75f
+            view.scaleY = 0.75f
+            view.animate()
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(200)
+                .setInterpolator(OvershootInterpolator(1.1f))
+                .start()
+        }
+    }
+
+    private fun showCollapsedUi() {
+        containerExpanded?.let { it.animate().cancel() }
+        containerExpanded?.visibility = View.GONE
+        containerCollapsed?.visibility = View.VISIBLE
+    }
+
+    private fun updateVisualizerBars(levels: FloatArray) {
+        if (mode != Mode.RECORDING) return
+        val minHeightPx = (4 * density).toInt()
+        val maxHeightPx = (24 * density).toInt()
+
+        visualizerBars.forEachIndexed { index, bar ->
+            val level = if (index < levels.size) levels[index] else 0.12f
+            val targetHeight = (minHeightPx + (maxHeightPx - minHeightPx) * level).toInt()
+            val params = bar.layoutParams
+            params.height = targetHeight
+            bar.layoutParams = params
+        }
     }
 }

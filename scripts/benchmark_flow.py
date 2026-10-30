@@ -26,9 +26,10 @@ lib = ctypes.CDLL(LIB_PATH)
 lib.better_whisper_clean_text.argtypes = [
     ctypes.c_char_p,  # input
     ctypes.c_char_p,  # context_before_cursor
-    ctypes.c_bool,    # remove_fillers
-    ctypes.c_bool,    # deduplicate_stutters
-    ctypes.c_bool,    # handle_self_corrections
+    ctypes.c_int,     # remove_fillers (int32_t, not C bool)
+    ctypes.c_int,     # deduplicate_stutters
+    ctypes.c_int,     # handle_self_corrections
+    ctypes.c_int,     # aggressive_discourse
 ]
 lib.better_whisper_clean_text.restype = ctypes.c_void_p
 
@@ -42,9 +43,10 @@ def clean_text(raw_text: str, context: str = None) -> str:
     ptr = lib.better_whisper_clean_text(
         raw_bytes,
         context_bytes,
-        True, # remove_fillers
-        True, # deduplicate_stutters
-        True, # handle_self_corrections
+        1, # remove_fillers
+        1, # deduplicate_stutters
+        1, # handle_self_corrections
+        1, # aggressive_discourse
     )
     if not ptr:
         return ""
@@ -101,6 +103,24 @@ def run_tests():
             "input": "We tested phonon 2 and whisper flow on ios.",
             "context": None,
             "expected": "We tested Phonon-2 and Wispr Flow on iOS."
+        },
+        {
+            "name": "Contextual filler + discourse removal",
+            "input": "It's basically like really good, you know, and honestly fine.",
+            "context": None,
+            "expected": "It's really good, and honestly fine."
+        },
+        {
+            "name": "Literal 'like' is preserved",
+            "input": "I like pizza and it looks like rain.",
+            "context": None,
+            "expected": "I like pizza and it looks like rain."
+        },
+        {
+            "name": "Literal 'kind of' is preserved",
+            "input": "What kind of car is that?",
+            "context": None,
+            "expected": "What kind of car is that?"
         }
     ]
 
@@ -137,7 +157,9 @@ def run_tests():
     avg_latency_us = (total_time / iterations) * 1_000_000
 
     print(f"Total time for {iterations} runs: {total_time:.4f} seconds")
-    print(f"Average cleaner latency: {avg_latency_us:.2f} microseconds (<0.1 ms!)")
+    print(f"Average cleaner latency: {avg_latency_us:.2f} microseconds ({avg_latency_us / 1000:.2f} ms)")
+    if avg_latency_us >= 1000:
+        print("Note: this is above the 1.5 ms design target; check for a debug build.")
     print("=" * 65)
 
 if __name__ == "__main__":

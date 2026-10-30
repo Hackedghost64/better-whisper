@@ -66,6 +66,11 @@ Java_com_betterwhisper_core_transcribe_PhononTranscribeEngine_nativeTranscribeBu
     }
 
     jfloat* pcm = env->GetFloatArrayElements(pcm_jarr, nullptr);
+    if (pcm == nullptr) {
+        // GetFloatArrayElements already raised OutOfMemoryError.
+        LOGE("Could not pin PCM array");
+        return nullptr;
+    }
 
     phonon_result* result = nullptr;
     int rc = phonon_transcribe(model, pcm, static_cast<size_t>(len), PHONON_PCM_F32, 16000, 1, &result);
