@@ -3,6 +3,7 @@ package com.betterwhisper.feature.bubble
 import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Build
+import android.util.Log
 import android.view.*
 import android.view.animation.OvershootInterpolator
 import android.widget.ImageButton
@@ -14,14 +15,18 @@ import kotlin.math.abs
 
 class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
 
+    companion object {
+        private const val TAG = "FlowBubbleOverlay"
+    }
+
     private val windowManager = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var bubbleView: View? = null
     private var isExpanded = false
+    private var isTranscribing = false
 
     private val audioEngine = AudioCaptureEngine()
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var visualizerJob: Job? = null
-    private var audioStreamJob: Job? = null
 
     private lateinit var containerCollapsed: View
     private lateinit var containerExpanded: View
@@ -35,24 +40,37 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
     private var initialTouchY = 0f
     private var isDragging = false
 
-    // Default keyboard height on S23 Ultra / modern phones is ~300dp (~1100px)
     private val density = service.resources.displayMetrics.density
     private var currentImeHeight = (320 * density).toInt()
 
+    // Docked at the bottom-right corner, cleanly avoiding the middle of the screen
+    // and resting right above the keyboard's top edge
     private val layoutParams = WindowManager.LayoutParams().apply {
         type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
         format = PixelFormat.TRANSLUCENT
         flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
-        gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-        x = 0
-        y = currentImeHeight + (16 * density).toInt() // Position cleanly above the keyboard
+        gravity = Gravity.BOTTOM or Gravity.END
+        x = (16 * density).toInt() // 16dp from right edge, avoiding the center of the screen
+        y = currentImeHeight + (12 * density).toInt() // Above the keyboard
         width = WindowManager.LayoutParams.WRAP_CONTENT
         height = WindowManager.LayoutParams.WRAP_CONTENT
     }
 
-    fun show() {
-        if (bubbleView != null) return
+    fun show(keyboardTopFromBottomPx: Int? = null) {
+        if (keyboardTopFromBottomPx != null && keyboardTopFromBottomPx > (150 * density).toInt()) {
+            currentImeHeight = keyboardTopFromBottomPx
+            if (!isDragging) {
+                layoutParams.y = currentImeHeight + (12 * density).toInt()
+            }
+        }
+
+        if (bubbleView != null) {
+            try {
+                windowManager.updateViewLayout(bubbleView, layoutParams)
+            } catch (_: Exception) {}
+            return
+        }
 
         val inflater = LayoutInflater.from(service)
         val view = inflater.inflate(R.layout.layout_flow_bubble, null)
@@ -71,7 +89,6 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
             view.findViewById(R.id.bar_5)
         )
 
-        // Make the collapsed bubble draggable and clickable
         setupDraggable(containerCollapsed)
 
         btnClose.setOnClickListener {
@@ -82,16 +99,17 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
             finishAndInject()
         }
 
-        // Listen for keyboard insets dynamically to keep bubble above the keyboard
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             view.setOnApplyWindowInsetsListener { _, insets ->
                 val ime = insets.getInsets(WindowInsets.Type.ime())
                 if (ime.bottom > 0 && ime.bottom != currentImeHeight) {
                     currentImeHeight = ime.bottom
-                    layoutParams.y = currentImeHeight + (16 * density).toInt()
-                    try {
-                        windowManager.updateViewLayout(view, layoutParams)
-                    } catch (_: Exception) {}
+                    if (!isDragging) {
+                        layoutParams.y = currentImeHeight + (12 * density).toInt()
+                        try {
+                            windowManager.updateViewLayout(view, layoutParams)
+                        } catch (_: Exception) {}
+                    }
                 }
                 insets
             }
@@ -99,7 +117,10 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
 
         try {
             windowManager.addView(view, layoutParams)
-        } catch (_: Exception) {}
+            Log.i(TAG, "Flow bubble overlay added at x=${layoutParams.x}, y=${layoutParams.y} (above keyboard, bottom-right)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add Flow bubble view: ${e.message}", e)
+        }
     }
 
     private fun setupDraggable(view: View) {
@@ -114,13 +135,14 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - initialTouchX).toInt()
-                    val dy = (initialTouchY - event.rawY).toInt() // invert for Gravity.BOTTOM
+                    // For Gravity.END: dragging left increases X (moves further from right edge)
+                    val dx = (initialTouchX - event.rawX).toInt()
+                    val dy = (initialTouchY - event.rawY).toInt()
 
-                    if (abs(dx) > 10 || abs(dy) > 10) {
+                    if (abs(dx) > 12 || abs(dy) > 12) {
                         isDragging = true
-                        layoutParams.x = initialX + dx
-                        layoutParams.y = initialY + dy
+                        layoutParams.x = (initialX + dx).coerceAtLeast((8 * density).toInt())
+                        layoutParams.y = (initialY + dy).coerceAtLeast(currentImeHeight + (8 * density).toInt())
                         try {
                             windowManager.updateViewLayout(bubbleView, layoutParams)
                         } catch (_: Exception) {}
@@ -129,7 +151,6 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!isDragging) {
-                        // Regular tap -> expand to 3-component dictation pill
                         v.performClick()
                         expandAndStartDictation()
                     }
@@ -153,43 +174,34 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
     }
 
     private fun expandAndStartDictation() {
-        if (isExpanded) return
+        if (isExpanded || isTranscribing) return
         isExpanded = true
 
         containerCollapsed.visibility = View.GONE
         containerExpanded.visibility = View.VISIBLE
 
-        containerExpanded.scaleX = 0.7f
-        containerExpanded.scaleY = 0.7f
+        containerExpanded.scaleX = 0.75f
+        containerExpanded.scaleY = 0.75f
         containerExpanded.animate()
             .scaleX(1.0f)
             .scaleY(1.0f)
-            .setDuration(200)
-            .setInterpolator(OvershootInterpolator(1.2f))
+            .setDuration(220)
+            .setInterpolator(OvershootInterpolator(1.15f))
             .start()
 
-        // 1. Start Audio Capture (Module 2) - Battery optimized: only captures while active
-        audioEngine.startCapture()
+        // 1. Start audio capture (Module 2) - Manual stop only (never auto-stops on pauses)
+        val started = audioEngine.startCapture()
 
-        // 2. Open Stream in Transcription Engine (Module 3)
-        PhononTranscribeEngine.instance.startStream()
+        if (!started) {
+            Log.e(TAG, "Failed to start audio capture")
+            cancelAndCollapse()
+            return
+        }
 
-        // 3. Connect real-time visualizer
+        // 2. Drive the small audio visualizer
         visualizerJob = scope.launch {
             audioEngine.visualizerLevels.collectLatest { levels ->
                 updateVisualizerBars(levels)
-            }
-        }
-
-        // 4. Stream audio blocks into Phonon and auto-detect sentence completion
-        audioStreamJob = scope.launch(Dispatchers.IO) {
-            audioEngine.audioFlow.collect { pcmBlock ->
-                val event = PhononTranscribeEngine.instance.feedAudio(pcmBlock)
-                if (event != null && event.isFinal) {
-                    withContext(Dispatchers.Main) {
-                        finishAndInject()
-                    }
-                }
             }
         }
     }
@@ -198,9 +210,9 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
         val minHeightPx = (4 * density).toInt()
         val maxHeightPx = (24 * density).toInt()
 
-        for (i in 0 until visualizerBars.size) {
+        for (i in visualizerBars.indices) {
             val bar = visualizerBars[i]
-            val level = if (i < levels.size) levels[i] else 0.1f
+            val level = if (i < levels.size) levels[i] else 0.12f
             val targetHeight = (minHeightPx + (maxHeightPx - minHeightPx) * level).toInt()
 
             val lp = bar.layoutParams
@@ -214,31 +226,45 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
         isExpanded = false
 
         visualizerJob?.cancel()
-        audioStreamJob?.cancel()
-        audioEngine.stopCapture()
-        PhononTranscribeEngine.instance.stopStream()
+        audioEngine.stopAndGetPcm()
 
         containerExpanded.visibility = View.GONE
         containerCollapsed.visibility = View.VISIBLE
     }
 
     private fun finishAndInject() {
-        if (!isExpanded) return
+        if (!isExpanded || isTranscribing) return
         isExpanded = false
+        isTranscribing = true
 
         visualizerJob?.cancel()
-        audioStreamJob?.cancel()
-        audioEngine.stopCapture()
+        val pcmSamples = audioEngine.stopAndGetPcm()
+
+        containerExpanded.visibility = View.GONE
+        containerCollapsed.visibility = View.VISIBLE
+
+        if (pcmSamples.isEmpty()) {
+            isTranscribing = false
+            return
+        }
 
         scope.launch(Dispatchers.IO) {
-            val transcript = PhononTranscribeEngine.instance.stopStream()
-            withContext(Dispatchers.Main) {
-                containerExpanded.visibility = View.GONE
-                containerCollapsed.visibility = View.VISIBLE
+            try {
+                PhononTranscribeEngine.instance.ensureLoaded(service.applicationContext)
+                val t0 = System.currentTimeMillis()
+                val rawTranscript = PhononTranscribeEngine.instance.transcribeBuffer(pcmSamples)
+                val decodeMs = System.currentTimeMillis() - t0
+                Log.i(TAG, "Phonon-2 decoded in ${decodeMs}ms: \"$rawTranscript\"")
 
-                if (transcript.isNotBlank()) {
-                    service.injectTextIntoFocusedField(transcript)
+                if (rawTranscript.isNotBlank()) {
+                    withContext(Dispatchers.Main) {
+                        service.injectTextIntoFocusedField(rawTranscript, decodeMs)
+                    }
                 }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Transcription error: ${t.message}", t)
+            } finally {
+                isTranscribing = false
             }
         }
     }

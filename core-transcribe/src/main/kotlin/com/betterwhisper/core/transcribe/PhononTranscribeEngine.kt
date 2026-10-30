@@ -1,88 +1,101 @@
 package com.betterwhisper.core.transcribe
 
-data class StreamEvent(
-    val kind: Int, // 1 = PARTIAL, 2 = FINAL (sentence completion)
-    val text: String
-) {
-    val isFinal: Boolean get() = kind == 2
-}
+import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import java.io.File
 
 /**
  * Module 3: Pure transcription engine using official Fermion libphonon.so.
- * No UI components. Handles streaming audio feed and automatically detects
- * when a sentence is complete (PHONON_EVENT_FINAL).
+ * Zero UI components. Follows OpenWhispr's LocalParakeetService serialized singleton pattern.
  */
 class PhononTranscribeEngine {
 
     companion object {
+        private const val TAG = "PhononTranscribeEngine"
+
         init {
-            System.loadLibrary("phonon")
-            System.loadLibrary("transcribe_jni")
+            try {
+                System.loadLibrary("phonon")
+                System.loadLibrary("transcribe_jni")
+                Log.i(TAG, "Loaded native libphonon.so + libtranscribe_jni.so")
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to load Phonon JNI libraries: ${t.message}", t)
+            }
         }
 
         val instance by lazy { PhononTranscribeEngine() }
     }
 
     private var modelHandle: Long = 0
-    private var activeStreamHandle: Long = 0
+
+    private val _isLoadedFlow = MutableStateFlow(false)
+    val isLoadedFlow: StateFlow<Boolean> = _isLoadedFlow
 
     val isModelLoaded: Boolean get() = modelHandle != 0L
+
+    /**
+     * Ensures the Phonon-2 model is loaded from app filesDir or fallback directories.
+     * Safe to call from both MainActivity and FlowAccessibilityService.
+     */
+    @Synchronized
+    fun ensureLoaded(context: Context): Boolean {
+        if (modelHandle != 0L) return true
+
+        val candidateDirs = listOf(
+            File(context.filesDir, "phonon2"),
+            File("/data/local/tmp/phonon2"),
+            File("/sdcard/Download/phonon2")
+        )
+
+        for (dir in candidateDirs) {
+            val cfg = File(dir, "config.json")
+            val weights = File(dir, "model.fermion")
+            if (cfg.exists() && weights.exists()) {
+                Log.i(TAG, "Found Phonon-2 weights at ${dir.absolutePath}")
+                modelHandle = nativeLoad(dir.absolutePath)
+                if (modelHandle != 0L) {
+                    _isLoadedFlow.value = true
+                    return true
+                }
+            }
+        }
+        Log.e(TAG, "Could not find Phonon-2 weights in any candidate directory")
+        return false
+    }
 
     @Synchronized
     fun loadModel(modelDir: String): Boolean {
         if (modelHandle != 0L) return true
         modelHandle = nativeLoad(modelDir)
+        _isLoadedFlow.value = (modelHandle != 0L)
         return modelHandle != 0L
     }
 
-    @Synchronized
-    fun startStream(): Boolean {
-        if (modelHandle == 0L) return false
-        if (activeStreamHandle != 0L) {
-            stopStream()
-        }
-        activeStreamHandle = nativeStreamOpen(modelHandle)
-        return activeStreamHandle != 0L
-    }
-
-    @Synchronized
-    fun feedAudio(pcm: FloatArray): StreamEvent? {
-        if (activeStreamHandle == 0L || pcm.isEmpty()) return null
-        return nativeStreamFeed(activeStreamHandle, pcm)
-    }
-
-    @Synchronized
-    fun stopStream(): String {
-        if (activeStreamHandle == 0L) return ""
-        val text = nativeStreamClose(activeStreamHandle)
-        nativeStreamFree(activeStreamHandle)
-        activeStreamHandle = 0
-        return text
-    }
-
+    /**
+     * Runs a single fast batch decode over the utterance buffer (~80-200ms).
+     */
     @Synchronized
     fun transcribeBuffer(pcm: FloatArray): String {
-        if (modelHandle == 0L || pcm.isEmpty()) return ""
+        if (modelHandle == 0L || pcm.isEmpty()) {
+            Log.w(TAG, "transcribeBuffer skipped: modelHandle=$modelHandle, pcmSize=${pcm.size}")
+            return ""
+        }
         return nativeTranscribeBuffer(modelHandle, pcm)
     }
 
     @Synchronized
     fun release() {
-        if (activeStreamHandle != 0L) {
-            stopStream()
-        }
         if (modelHandle != 0L) {
             nativeFree(modelHandle)
             modelHandle = 0
+            _isLoadedFlow.value = false
         }
     }
 
     // JNI Declarations
     private external fun nativeLoad(modelDir: String): Long
     private external fun nativeFree(modelHandle: Long)
-    private external fun nativeStreamOpen(modelHandle: Long): Long
-    private external fun nativeStreamFeed(streamHandle: Long, pcm: FloatArray): StreamEvent?
-    private external fun nativeStreamClose(streamHandle: Long): String
-    private external fun nativeStreamFree(streamHandle: Long)
     private external fun nativeTranscribeBuffer(modelHandle: Long, pcm: FloatArray): String
 }

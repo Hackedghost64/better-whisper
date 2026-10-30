@@ -1,12 +1,14 @@
 package com.betterwhisper
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -18,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,32 +29,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.betterwhisper.core.audio.AudioCaptureEngine
 import com.betterwhisper.core.cleaner.TranscriptCleaner
 import com.betterwhisper.core.transcribe.PhononTranscribeEngine
-import java.io.File
+import com.betterwhisper.feature.bubble.DictationEventBus
+import com.betterwhisper.feature.bubble.FlowAccessibilityService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize Phonon-2 model from available local paths
         Thread {
-            val candidateDirs = listOf(
-                File(filesDir, "phonon2"),
-                File("/data/local/tmp/phonon2"),
-                File("/sdcard/Download/phonon2")
-            )
-            for (dir in candidateDirs) {
-                if (File(dir, "config.json").exists() && File(dir, "model.fermion").exists()) {
-                    PhononTranscribeEngine.instance.loadModel(dir.absolutePath)
-                    break
-                }
-            }
+            PhononTranscribeEngine.instance.ensureLoaded(applicationContext)
         }.start()
 
         setContent {
@@ -66,28 +68,48 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@SuppressLint("BatteryLife")
 @Composable
 fun SetupAndTestScreen() {
     val context = LocalContext.current
-    var hasMicPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
-        )
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
+
+    var hasMicPermission by remember { mutableStateOf(checkMicPermission(context)) }
+    var canDrawOverlay by remember { mutableStateOf(checkOverlayPermission(context)) }
+    var isAccessibilityEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var isBatteryUnrestricted by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+
+    val isModelLoaded by PhononTranscribeEngine.instance.isLoadedFlow.collectAsState()
+    val isServiceConnected by FlowAccessibilityService.isConnected.collectAsState()
+    val latestDictation by DictationEventBus.latestEvent.collectAsState()
+
+    val refreshPermissions = {
+        hasMicPermission = checkMicPermission(context)
+        canDrawOverlay = checkOverlayPermission(context)
+        isAccessibilityEnabled = isAccessibilityServiceEnabled(context) || isServiceConnected
+        isBatteryUnrestricted = isIgnoringBatteryOptimizations(context)
     }
 
-    var canDrawOverlay by remember {
-        mutableStateOf(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                Settings.canDrawOverlays(context)
-            } else true
-        )
+    // Re-check permissions immediately whenever user returns from Settings (ON_RESUME)
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshPermissions()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
-    var isAccessibilityEnabled by remember {
-        mutableStateOf(isAccessibilityServiceEnabled(context))
+    // Also poll every 500ms while screen is open so permission states update live without restart
+    LaunchedEffect(Unit) {
+        while (true) {
+            refreshPermissions()
+            delay(500)
+        }
     }
 
     val micLauncher = rememberLauncherForActivityResult(
@@ -96,19 +118,21 @@ fun SetupAndTestScreen() {
         hasMicPermission = granted
     }
 
-    var isModelLoaded by remember {
-        mutableStateOf(PhononTranscribeEngine.instance.isModelLoaded)
-    }
+    var testInputText by remember { mutableStateOf("") }
+    var statusMessage by remember { mutableStateOf("") }
+    var isDirectRecording by remember { mutableStateOf(false) }
+    val directAudioEngine = remember { AudioCaptureEngine() }
 
-    LaunchedEffect(Unit) {
-        while (!isModelLoaded) {
-            kotlinx.coroutines.delay(500)
-            isModelLoaded = PhononTranscribeEngine.instance.isModelLoaded
+    // Automatically append any dictation that arrives from the floating Flow bubble
+    LaunchedEffect(latestDictation?.timestamp) {
+        val ev = latestDictation ?: return@LaunchedEffect
+        if (ev.cleanedText.isNotBlank()) {
+            if (!testInputText.endsWith(ev.cleanedText)) {
+                testInputText += ev.cleanedText
+            }
+            statusMessage = "Transcribed in ${ev.decodeMs} ms"
         }
     }
-
-    var testInputText by remember { mutableStateOf("") }
-    var cleanedOutputText by remember { mutableStateOf("") }
 
     Column(
         modifier = Modifier
@@ -117,7 +141,6 @@ fun SetupAndTestScreen() {
             .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // App Title
         Text(
             text = "Better Whisper",
             fontSize = 26.sp,
@@ -133,7 +156,7 @@ fun SetupAndTestScreen() {
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Model Engine Status Badge
+        // Engine Status Badge
         Surface(
             color = if (isModelLoaded) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFFF59E0B).copy(alpha = 0.15f),
             shape = RoundedCornerShape(8.dp),
@@ -159,11 +182,10 @@ fun SetupAndTestScreen() {
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(18.dp))
 
-        // Permissions Section
         Text(
-            text = "PERMISSIONS STATUS",
+            text = "PERMISSIONS STATUS (LIVE)",
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White.copy(alpha = 0.5f),
@@ -171,28 +193,24 @@ fun SetupAndTestScreen() {
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        // 1. Overlay Permission
         PermissionItem(
             title = "1. Display Over Other Apps",
-            description = "Allows the Flow bubble to float above any app when typing.",
+            description = "Displays the Flow bubble above your keyboard when typing.",
             isGranted = canDrawOverlay,
             onAction = {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:${context.packageName}")
-                    )
-                    context.startActivity(intent)
-                }
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:${context.packageName}")
+                )
+                context.startActivity(intent)
             }
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // 2. Accessibility Permission
         PermissionItem(
             title = "2. Enable Accessibility Service",
-            description = "Detects text field clicks and pastes the dictation automatically.",
+            description = "Detects text field focus and pastes dictations automatically.",
             isGranted = isAccessibilityEnabled,
             onAction = {
                 val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
@@ -200,40 +218,63 @@ fun SetupAndTestScreen() {
             }
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // 3. Microphone Permission
         PermissionItem(
             title = "3. Microphone Access",
-            description = "Records 16 kHz voice audio for local Phonon-2 transcription.",
+            description = "Captures 16 kHz audio only while the bubble is active.",
             isGranted = hasMicPermission,
             onAction = {
                 micLauncher.launch(Manifest.permission.RECORD_AUDIO)
             }
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // Test Field
-        Text(
-            text = "TEST PLAYGROUND",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White.copy(alpha = 0.5f),
-            modifier = Modifier.fillMaxWidth()
+        PermissionItem(
+            title = "4. Unrestricted Battery",
+            description = "Prevents Android from putting the Flow bubble service to sleep.",
+            isGranted = isBatteryUnrestricted,
+            onAction = {
+                val intent = Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:${context.packageName}")
+                )
+                context.startActivity(intent)
+            }
         )
+
+        Spacer(modifier = Modifier.height(22.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "TEST PLAYGROUND",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White.copy(alpha = 0.5f)
+            )
+            if (statusMessage.isNotBlank()) {
+                Text(
+                    text = statusMessage,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF10B981)
+                )
+            }
+        }
         Spacer(modifier = Modifier.height(8.dp))
 
         OutlinedTextField(
             value = testInputText,
-            onValueChange = {
-                testInputText = it
-                cleanedOutputText = TranscriptCleaner.default.clean(it)
-            },
-            placeholder = { Text("Tap here to see the Flow bubble appear...", color = Color.Gray) },
+            onValueChange = { testInputText = it },
+            placeholder = { Text("Tap here to bring up the Flow bubble, or tap Test Voice below...", color = Color.Gray) },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(120.dp),
+                .height(130.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedContainerColor = Color(0xFF161B22),
                 unfocusedContainerColor = Color(0xFF161B22),
@@ -245,29 +286,58 @@ fun SetupAndTestScreen() {
             shape = RoundedCornerShape(12.dp)
         )
 
-        if (cleanedOutputText.isNotBlank()) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        text = "CLEANED RESULT (WISPR FLOW PASS):",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF10B981)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = cleanedOutputText,
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Direct in-app test button that invokes Module 2 -> Module 3 -> Module 4 directly
+        Button(
+            onClick = {
+                if (!hasMicPermission) {
+                    micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    return@Button
                 }
-            }
+                if (!isDirectRecording) {
+                    isDirectRecording = true
+                    statusMessage = "Listening... (tap Stop & Transcribe when done)"
+                    directAudioEngine.startCapture()
+                } else {
+                    isDirectRecording = false
+                    statusMessage = "Transcribing..."
+                    val pcm = directAudioEngine.stopAndGetPcm()
+                    scope.launch {
+                        val res = withContext(Dispatchers.IO) {
+                            PhononTranscribeEngine.instance.ensureLoaded(context.applicationContext)
+                            val t0 = System.currentTimeMillis()
+                            val raw = PhononTranscribeEngine.instance.transcribeBuffer(pcm)
+                            val ms = System.currentTimeMillis() - t0
+                            val cleaned = TranscriptCleaner.default.clean(raw, testInputText)
+                            Triple(raw, cleaned, ms)
+                        }
+                        if (res.second.isNotBlank()) {
+                            testInputText += res.second
+                            statusMessage = "Wrote sentence in ${res.third} ms"
+                        } else {
+                            statusMessage = "No speech detected (${res.third} ms)"
+                        }
+                    }
+                }
+            },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isDirectRecording) Color(0xFFEF4444) else Color(0xFF3B82F6)
+            ),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+        ) {
+            Icon(
+                imageVector = if (isDirectRecording) Icons.Default.Stop else Icons.Default.Mic,
+                contentDescription = null
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (isDirectRecording) "Stop & Transcribe Now" else "Test Voice Dictation",
+                fontWeight = FontWeight.SemiBold
+            )
         }
     }
 }
@@ -280,9 +350,7 @@ fun PermissionItem(
     onAction: () -> Unit
 ) {
     Card(
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF161B22)
-        ),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22)),
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -322,18 +390,43 @@ fun PermissionItem(
                 ) {
                     Text("Grant", fontSize = 12.sp)
                 }
+            } else {
+                Text(
+                    text = "Active",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF10B981)
+                )
             }
         }
     }
 }
 
+fun checkMicPermission(context: Context): Boolean {
+    return ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.RECORD_AUDIO
+    ) == PackageManager.PERMISSION_GRANTED
+}
+
+fun checkOverlayPermission(context: Context): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        Settings.canDrawOverlays(context)
+    } else true
+}
+
 fun isAccessibilityServiceEnabled(context: Context): Boolean {
-    val expectedServiceName = "${context.packageName}/com.betterwhisper.feature.bubble.FlowAccessibilityService"
     val enabledServices = Settings.Secure.getString(
         context.contentResolver,
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
     ) ?: return false
-    return enabledServices.contains(expectedServiceName)
+    return enabledServices.contains(context.packageName) &&
+            enabledServices.contains("FlowAccessibilityService")
+}
+
+fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+    val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    return pm.isIgnoringBatteryOptimizations(context.packageName)
 }
 
 @Composable
