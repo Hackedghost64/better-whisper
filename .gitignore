@@ -1,5 +1,5 @@
 target/
-core/target/
+core/text-cleaning/engine/target/
 *.so
 *.a
 *.dylib
@@ -11,10 +11,10 @@ models/weights/
 .kotlin/
 build/
 app/build/
-core-audio/build/
-core-cleaner/build/
-core-transcribe/build/
-feature-bubble/build/
+core/audio/build/
+core/text-cleaning/build/
+core/transcription/build/
+feature/bubble/build/
 *.png
 
 # Android Gradle Plugin / NDK intermediate output (was accidentally committed).
