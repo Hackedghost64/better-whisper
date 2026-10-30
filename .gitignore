@@ -1,0 +1,9 @@
+target/
+core/target/
+*.so
+*.a
+*.dylib
+*.dll
+models/weights/
+*.zip
+*.tar.gz
