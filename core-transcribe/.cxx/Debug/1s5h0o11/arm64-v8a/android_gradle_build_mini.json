@@ -1,0 +1,29 @@
+{
+  "buildFiles": [
+    "/home/divyam/Desktop/projects/better-whisper/core-transcribe/src/main/cpp/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/home/divyam/Android/Sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/home/divyam/Desktop/projects/better-whisper/core-transcribe/.cxx/Debug/1s5h0o11/arm64-v8a",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/home/divyam/Android/Sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/home/divyam/Desktop/projects/better-whisper/core-transcribe/.cxx/Debug/1s5h0o11/arm64-v8a",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "transcribe_jni::@6890427a1f51a3e7e1df": {
+      "artifactName": "transcribe_jni",
+      "abi": "arm64-v8a",
+      "output": "/home/divyam/Desktop/projects/better-whisper/core-transcribe/build/intermediates/cxx/Debug/1s5h0o11/obj/arm64-v8a/libtranscribe_jni.so",
+      "runtimeFiles": [
+        "/home/divyam/Desktop/projects/better-whisper/core-transcribe/src/main/jniLibs/arm64-v8a/libphonon.so"
+      ]
+    }
+  }
+}

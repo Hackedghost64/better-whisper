@@ -1,0 +1,4 @@
+<resources>
+    <string name="accessibility_service_name">Better Whisper Flow Service</string>
+    <string name="accessibility_service_description">Shows the Wispr Flow bubble when typing in any app and injects cleaned voice dictations directly into text fields.</string>
+</resources>

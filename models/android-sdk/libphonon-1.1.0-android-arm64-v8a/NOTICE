@@ -1,0 +1,30 @@
+libphonon
+Copyright 2026 Fermion Research
+
+This library (the Phonon speech-to-text runtime) is licensed under the Apache License, Version 2.0. The full text is in the LICENSE
+file beside this one.
+
+================================================================================
+BASE MODEL
+================================================================================
+
+Phonon-2 is derived from NVIDIA's Parakeet TDT 0.6B v3 (nvidia/parakeet-tdt-0.6b-v3).
+    Copyright (c) NVIDIA Corporation. Licensed under the Creative Commons Attribution 4.0 International
+    licence (CC-BY-4.0).
+    https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+    https://creativecommons.org/licenses/by/4.0/
+
+================================================================================
+MODEL WEIGHTS ARE NOT IN THIS PACKAGE
+================================================================================
+
+The library loads model.fermion + config.json of FermionResearch/Phonon-2.5-English, Phonon-2.5 or Phonon-2, downloaded separately, each with its own
+licence and NOTICE.
+
+================================================================================
+THIRD-PARTY ALGORITHMS
+================================================================================
+
+The 512-point real FFT of the front end follows the radix-4/radix-2 real-input algorithm of pocketfft
+(Copyright (C) 2010-2019 Max-Planck-Society, BSD-3-Clause; https://gitlab.mpcdf.mpg.de/mtr/pocketfft), re-implemented
+here for the fixed size; no pocketfft source file is included.

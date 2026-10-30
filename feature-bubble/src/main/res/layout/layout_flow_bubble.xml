@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+
+    <!-- 1. Collapsed Flow Bubble (Whisper Flow Icon) -->
+    <FrameLayout
+        android:id="@+id/container_collapsed"
+        android:layout_width="50dp"
+        android:layout_height="50dp"
+        android:background="@drawable/bg_bubble_collapsed"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="8dp">
+
+        <ImageView
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_mic_flow"
+            android:contentDescription="Start Dictation" />
+    </FrameLayout>
+
+    <!-- 2. Expanded 3-Component Pill: [ Close ] [ Visualizer ] [ Done ] -->
+    <LinearLayout
+        android:id="@+id/container_expanded"
+        android:layout_width="wrap_content"
+        android:layout_height="52dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:background="@drawable/bg_bubble_expanded"
+        android:visibility="gone"
+        android:elevation="10dp">
+
+        <!-- Component 1 (Left): Close Button -->
+        <ImageButton
+            android:id="@+id/btn_close"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_close"
+            android:tint="#EF4444"
+            android:contentDescription="Cancel Dictation" />
+
+        <!-- Component 2 (Middle): Small Audio Visualizer -->
+        <LinearLayout
+            android:id="@+id/layout_visualizer"
+            android:layout_width="68dp"
+            android:layout_height="32dp"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp">
+
+            <View
+                android:id="@+id/bar_1"
+                android:layout_width="4dp"
+                android:layout_height="6dp"
+                android:layout_marginEnd="4dp"
+                android:background="@drawable/bg_visualizer_bar" />
+
+            <View
+                android:id="@+id/bar_2"
+                android:layout_width="4dp"
+                android:layout_height="12dp"
+                android:layout_marginEnd="4dp"
+                android:background="@drawable/bg_visualizer_bar" />
+
+            <View
+                android:id="@+id/bar_3"
+                android:layout_width="4dp"
+                android:layout_height="22dp"
+                android:layout_marginEnd="4dp"
+                android:background="@drawable/bg_visualizer_bar" />
+
+            <View
+                android:id="@+id/bar_4"
+                android:layout_width="4dp"
+                android:layout_height="14dp"
+                android:layout_marginEnd="4dp"
+                android:background="@drawable/bg_visualizer_bar" />
+
+            <View
+                android:id="@+id/bar_5"
+                android:layout_width="4dp"
+                android:layout_height="8dp"
+                android:background="@drawable/bg_visualizer_bar" />
+        </LinearLayout>
+
+        <!-- Component 3 (Right): Done Button -->
+        <ImageButton
+            android:id="@+id/btn_done"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_check"
+            android:tint="#10B981"
+            android:contentDescription="Done Dictating" />
+    </LinearLayout>
+
+</FrameLayout>

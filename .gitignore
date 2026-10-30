@@ -7,3 +7,12 @@ core/target/
 models/weights/
 *.zip
 *.tar.gz
+.gradle/
+.kotlin/
+build/
+app/build/
+core-audio/build/
+core-cleaner/build/
+core-transcribe/build/
+feature-bubble/build/
+*.png

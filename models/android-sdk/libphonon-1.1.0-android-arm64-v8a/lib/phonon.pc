@@ -1,0 +1,11 @@
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: phonon
+Description: libphonon, the Phonon-2 speech-to-text C library (audio in, text out; libc, libm, pthread only)
+Version: 1.1.0
+Libs: -L${libdir} -lphonon
+Libs.private: -lm -lpthread
+Cflags: -I${includedir}
