@@ -29,6 +29,10 @@ class LlamaIntentEngine {
             "You are a speech repair engine. Given spoken text containing self-corrections, slips of the tongue, or false starts, output the intended final sentence. Output ONLY the clean sentence without explanation.<|im_end|>\n" +
             "<|im_start|>user\nhow about at 5pm no at 6<|im_end|>\n" +
             "<|im_start|>assistant\nHow about at 6pm.<|im_end|>\n" +
+            "<|im_start|>user\nHow about at six? No, seven.<|im_end|>\n" +
+            "<|im_start|>assistant\nHow about at seven.<|im_end|>\n" +
+            "<|im_start|>user\nLet's set up the call for four pm. No, actually five pm<|im_end|>\n" +
+            "<|im_start|>assistant\nLet's set up the call for five pm.<|im_end|>\n" +
             "<|im_start|>user\nlet's meet Tuesday wait Wednesday<|im_end|>\n" +
             "<|im_start|>assistant\nLet's meet Wednesday.<|im_end|>\n" +
             "<|im_start|>user\nsend the email to David actually Sarah<|im_end|>\n" +

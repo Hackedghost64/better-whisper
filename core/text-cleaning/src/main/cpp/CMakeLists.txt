@@ -4,6 +4,7 @@ project("cleaner_jni")
 add_library(better_whisper_core SHARED IMPORTED)
 set_target_properties(better_whisper_core PROPERTIES
     IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libbetter_whisper_core.so"
+    IMPORTED_SONAME "libbetter_whisper_core.so"
 )
 
 add_library(cleaner_jni SHARED cleaner_jni.cpp)

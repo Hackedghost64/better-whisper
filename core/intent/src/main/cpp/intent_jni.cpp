@@ -143,11 +143,18 @@ Java_com_betterwhisper_core_intent_LlamaIntentEngine_nativeRepair(
         }
 
         std::string piece = common_token_to_piece(intentCtx->ctx, new_token);
-        // Early stop on delimiter, newline or stop token
+        // Early stop on delimiter or end tokens
         if (piece.find("<|im_end|>") != std::string::npos ||
-            piece.find("<|endoftext|>") != std::string::npos ||
-            piece.find("\n") != std::string::npos) {
+            piece.find("<|endoftext|>") != std::string::npos) {
             break;
+        }
+
+        // Only break on newline once non-empty text has started
+        if (piece.find("\n") != std::string::npos) {
+            if (!outputText.empty()) {
+                break;
+            }
+            continue; // Skip leading newline before assistant reply
         }
 
         outputText += piece;

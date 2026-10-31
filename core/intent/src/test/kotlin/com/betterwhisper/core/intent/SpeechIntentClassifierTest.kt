@@ -9,20 +9,31 @@ class SpeechIntentClassifierTest {
     @Test
     fun testTrueRepairCues() {
         val repairSamples = listOf(
+            "How about at six? No, seven.",
+            "Let's set up the call for four pm. No, actually five pm",
+            "Let's set up the call for4 p.m. No, actually five p.m.",
             "how about at 5pm no at 6",
             "meet me at 5 no 6pm",
             "let's meet on Tuesday wait make it Wednesday",
             "tomorrow wait Thursday",
             "send the email to David actually Sarah",
+            "send the email to David, actually Sarah",
             "let's order pizza actually sushi",
+            "let's order pizza, actually sushi",
             "that costs twenty five I mean thirty five dollars",
             "page 42 I mean 43",
             "I wanted to ask if wait forget that let's order food",
             "call Bob scratch that call Alice",
+            "call Bob, scratch that, call Alice",
             "delete the file never mind keep it",
+            "delete the file, never mind, keep it",
             "meeting at 3 or rather 4",
+            "meeting at 3, or rather 4",
             "we need 10 items sorry I meant 12 items",
-            "meet at 4 no wait 5"
+            "meet at 4 no wait 5",
+            "meet at 4, no wait, 5",
+            "on Monday, no, Tuesday",
+            "at 6? No, 7"
         )
 
         for (sample in repairSamples) {
@@ -47,7 +58,6 @@ class SpeechIntentClassifierTest {
             "Call me tomorrow morning",
             "Send the report to Sarah and David",
             "Hello world this is a test dictation",
-            // Additional colloquial guards identified by Devrith review:
             "Can you make it to dinner tonight",
             "Did you make that from scratch",
             "Let us make that happen soon",
