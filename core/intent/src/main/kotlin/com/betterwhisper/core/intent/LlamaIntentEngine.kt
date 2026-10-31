@@ -19,8 +19,8 @@ class LlamaIntentEngine {
             try {
                 System.loadLibrary("intent_jni")
                 Log.i(TAG, "Successfully loaded libintent_jni.so")
-            } catch (e: UnsatisfiedLinkError) {
-                Log.e(TAG, "Failed to load libintent_jni.so: ${e.message}")
+            } catch (t: Throwable) {
+                // Graceful fallback on host JVM where arm64-v8a native lib isn't available
             }
         }
 

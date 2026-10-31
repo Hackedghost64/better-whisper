@@ -25,6 +25,7 @@ dependencies {
     implementation(project(":core:audio"))
     implementation(project(":core:transcription"))
     implementation(project(":core:text-cleaning"))
+    implementation(project(":core:intent"))
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
