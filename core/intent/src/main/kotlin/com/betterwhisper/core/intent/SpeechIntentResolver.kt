@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Hybrid speech intent and self-correction dispatcher.
@@ -25,11 +26,10 @@ object SpeechIntentResolver {
 
     private val engine = LlamaIntentEngine()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var isInitializing = false
+    private val isInitializing = AtomicBoolean(false)
 
     fun init(context: Context) {
-        if (engine.isLoaded.value || isInitializing) return
-        isInitializing = true
+        if (engine.isLoaded.value || !isInitializing.compareAndSet(false, true)) return
 
         scope.launch {
             try {
@@ -44,7 +44,7 @@ object SpeechIntentResolver {
             } catch (e: Exception) {
                 Log.e(TAG, "Error initializing intent engine: ${e.message}", e)
             } finally {
-                isInitializing = false
+                isInitializing.set(false)
             }
         }
     }

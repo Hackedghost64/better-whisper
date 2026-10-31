@@ -103,6 +103,7 @@ class FlowAccessibilityService : AccessibilityService() {
     override fun onTrimMemory(level: Int) {
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && overlay?.isBusy() != true) {
             PhononTranscribeEngine.instance.release()
+            SpeechIntentResolver.release()
         }
         super.onTrimMemory(level)
     }
