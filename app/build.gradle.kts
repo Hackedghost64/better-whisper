@@ -32,6 +32,10 @@ android {
         }
     }
 
+    androidResources {
+        noCompress += listOf("fermion", "gguf")
+    }
+
     signingConfigs {
         if (keystorePropertiesFile.exists()) {
             create("release") {

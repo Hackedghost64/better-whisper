@@ -5,6 +5,7 @@ core/text-cleaning/engine/target/
 *.dylib
 *.dll
 models/weights/
+app/src/main/assets/models/
 *.zip
 *.tar.gz
 .gradle/
