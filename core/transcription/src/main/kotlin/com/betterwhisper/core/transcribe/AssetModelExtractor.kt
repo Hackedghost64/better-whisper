@@ -91,7 +91,8 @@ object AssetModelExtractor {
             }
         }
 
-        val resolvedPhononDir = if (phononWeights.exists() && phononWeights.length() >= MIN_PHONON_SIZE) {
+        val resolvedPhononDir = if (phononWeights.exists() && phononWeights.length() >= MIN_PHONON_SIZE &&
+            phononConfig.exists() && phononConfig.length() > 0) {
             phononDir
         } else {
             findExternalPhononDir(context) ?: phononDir
@@ -110,26 +111,37 @@ object AssetModelExtractor {
     }
 
     private fun extractAssetToFile(context: Context, assetPath: String, destFile: File): Boolean {
+        var tempFile: File? = null
         return try {
             val startMs = System.currentTimeMillis()
             context.assets.open(assetPath).use { input ->
-                val tempFile = File(destFile.parentFile, "${destFile.name}.tmp")
-                FileOutputStream(tempFile).use { output ->
+                val tmp = File(destFile.parentFile, "${destFile.name}.tmp")
+                tempFile = tmp
+                FileOutputStream(tmp).use { output ->
                     val buffer = ByteArray(1024 * 1024) // 1MB buffer
                     var read: Int
-                    var total = 0L
                     while (input.read(buffer).also { read = it } != -1) {
                         output.write(buffer, 0, read)
-                        total += read
                     }
                     output.flush()
                 }
-                tempFile.renameTo(destFile)
+
+                if (destFile.exists()) {
+                    destFile.delete()
+                }
+
+                val renamed = tmp.renameTo(destFile)
+                if (!renamed) {
+                    tmp.copyTo(destFile, overwrite = true)
+                    tmp.delete()
+                }
+
                 val elapsed = System.currentTimeMillis() - startMs
                 Log.i(TAG, "Extracted $assetPath (${destFile.length()} bytes) in ${elapsed}ms")
             }
             true
         } catch (e: Exception) {
+            tempFile?.let { if (it.exists()) it.delete() }
             Log.d(TAG, "Asset not found or failed to extract ($assetPath): ${e.message}")
             false
         }
