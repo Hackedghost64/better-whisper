@@ -37,29 +37,82 @@ class PhononTranscribeEngine {
     val isModelLoaded: Boolean get() = modelHandle != 0L
 
     /**
-     * Ensures the Phonon-2 model is loaded from unpacked APK assets, private app storage,
-     * or fallback external candidate directories.
+     * Ensures the Phonon-2 model is loaded from app storage, external storage,
+     * or fallback system directories (/data/local/tmp/phonon2, /sdcard/Download/phonon2).
      */
     @Synchronized
     fun ensureLoaded(context: Context): Boolean {
         if (modelHandle != 0L) return true
 
-        val extracted = AssetModelExtractor.ensureExtracted(context)
-        val phononDir = extracted.phononDir
-        val cfg = File(phononDir, "config.json")
-        val weights = File(phononDir, "model.fermion")
+        val privateDir = File(context.filesDir, "phonon2")
 
-        if (cfg.exists() && weights.exists() && weights.length() > 1000) {
-            Log.i(TAG, "Loading Phonon-2 weights from ${phononDir.absolutePath} (${weights.length()} bytes)")
-            modelHandle = nativeLoad(phononDir.absolutePath)
-            if (modelHandle != 0L) {
-                _isLoadedFlow.value = true
-                Log.i(TAG, "Successfully initialized Phonon-2 handle from ${phononDir.absolutePath}")
-                return true
+        // Unpack bundled Phonon-2 assets into private storage if needed
+        val privateWeights = File(privateDir, "model.fermion")
+        if (!privateWeights.exists() || privateWeights.length() < 100_000_000L) {
+            try {
+                val assetList = context.assets.list("models/phonon2")
+                if (assetList != null && assetList.contains("model.fermion")) {
+                    privateDir.mkdirs()
+                    context.assets.open("models/phonon2/model.fermion").use { input ->
+                        File(privateDir, "model.fermion").outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    context.assets.open("models/phonon2/config.json").use { input ->
+                        File(privateDir, "config.json").outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    Log.i(TAG, "Successfully extracted bundled Phonon-2 weights to ${privateDir.absolutePath}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not extract Phonon-2 assets: ${e.message}")
             }
         }
 
-        Log.e(TAG, "Could not find or load Phonon-2 weights at: ${phononDir.absolutePath}")
+        val candidateDirs = listOfNotNull(
+            privateDir,
+            context.getExternalFilesDir(null)?.let { File(it, "phonon2") },
+            File(context.filesDir, "models/phonon2"),
+            File("/data/local/tmp/phonon2"),
+            File("/sdcard/Download/phonon2"),
+            try {
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)?.let {
+                    File(it, "phonon2")
+                }
+            } catch (_: Throwable) {
+                null
+            }
+        )
+
+        for (dir in candidateDirs) {
+            val cfg = File(dir, "config.json")
+            val weights = File(dir, "model.fermion")
+            if (cfg.exists() && weights.exists() && weights.length() > 1000) {
+                Log.i(TAG, "Found Phonon-2 weights at ${dir.absolutePath} (${weights.length()} bytes)")
+
+                // If found outside private storage and private dir doesn't have it, copy for faster/safer future loads
+                if (dir.absolutePath != privateDir.absolutePath && !File(privateDir, "model.fermion").exists()) {
+                    try {
+                        privateDir.mkdirs()
+                        cfg.copyTo(File(privateDir, "config.json"), overwrite = true)
+                        weights.copyTo(File(privateDir, "model.fermion"), overwrite = true)
+                        Log.i(TAG, "Mirrored Phonon-2 weights to private storage: ${privateDir.absolutePath}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not mirror weights to privateDir: ${e.message}")
+                    }
+                }
+
+                val loadPath = if (File(privateDir, "model.fermion").exists()) privateDir.absolutePath else dir.absolutePath
+                modelHandle = nativeLoad(loadPath)
+                if (modelHandle != 0L) {
+                    _isLoadedFlow.value = true
+                    Log.i(TAG, "Successfully initialized Phonon-2 handle from $loadPath")
+                    return true
+                }
+            }
+        }
+        Log.e(TAG, "Could not find Phonon-2 weights in any candidate directory: ${candidateDirs.map { it.absolutePath }}")
         return false
     }
 

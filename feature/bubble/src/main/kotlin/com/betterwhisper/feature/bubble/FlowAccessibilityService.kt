@@ -19,7 +19,6 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.betterwhisper.core.transcribe.PhononTranscribeEngine
-import com.betterwhisper.core.intent.SpeechIntentResolver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -78,7 +77,6 @@ class FlowAccessibilityService : AccessibilityService() {
 
         Thread {
             PhononTranscribeEngine.instance.ensureLoaded(applicationContext)
-            SpeechIntentResolver.init(applicationContext)
         }.start()
     }
 
@@ -103,7 +101,6 @@ class FlowAccessibilityService : AccessibilityService() {
     override fun onTrimMemory(level: Int) {
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && overlay?.isBusy() != true) {
             PhononTranscribeEngine.instance.release()
-            SpeechIntentResolver.release()
         }
         super.onTrimMemory(level)
     }
@@ -113,7 +110,6 @@ class FlowAccessibilityService : AccessibilityService() {
             unregisterReceiver(screenReceiver)
         } catch (_: Exception) {}
         mainHandler.removeCallbacks(evaluateRunnable)
-        SpeechIntentResolver.release()
         overlay?.onDestroy()
         overlay = null
         _isConnected.value = false

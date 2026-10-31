@@ -193,12 +193,11 @@ impl FlowCleaner {
             if protected_word {
                 continue;
             }
-            if fenced {
-                drop[i] = true;
-            } else if aggressive
-                && LIKE_FILLER_PREV.contains(prev)
-                && !CLAUSE_STARTERS.contains(next)
-                && !DETERMINERS.contains(next)
+            if fenced
+                || (aggressive
+                    && LIKE_FILLER_PREV.contains(prev)
+                    && !CLAUSE_STARTERS.contains(next)
+                    && !DETERMINERS.contains(next))
             {
                 drop[i] = true;
             }
@@ -423,7 +422,7 @@ impl FlowCleaner {
             Some('I') if s.starts_with("I ") || s == "I" || s.starts_with("I'") => s.to_string(),
             Some(first) => {
                 let remaining = chars.as_str();
-                if remaining.chars().next().map_or(false, |c| c.is_uppercase()) {
+                if remaining.chars().next().is_some_and(|c| c.is_uppercase()) {
                     s.to_string()
                 } else {
                     first.to_lowercase().collect::<String>() + remaining

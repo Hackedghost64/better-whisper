@@ -8,7 +8,6 @@ import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.betterwhisper.core.cleaner.TranscriptCleaner
-import com.betterwhisper.core.intent.SpeechIntentResolver
 
 /**
  * Resolves the focused editable field and inserts the cleaned transcript.
@@ -52,7 +51,7 @@ object TextInjector {
 
         val node = resolveTarget(service)
         if (node == null) {
-            val cleaned = SpeechIntentResolver.resolve(rawText)
+            val cleaned = TranscriptCleaner.default.clean(rawText)
             copyToClipboard(service, cleaned)
             emit(rawText, cleaned, decodeMs, injected = false, targetPackage = null)
             return Result.COPIED_ONLY
@@ -62,7 +61,7 @@ object TextInjector {
         if (expectedPackage != null && targetPackage != expectedPackage) {
             // Fast app switching used to paste a dictation into whatever app
             // happened to be focused. Keep the text, but do not write it.
-            val cleaned = SpeechIntentResolver.resolve(rawText)
+            val cleaned = TranscriptCleaner.default.clean(rawText)
             copyToClipboard(service, cleaned)
             Log.w(TAG, "App changed during dictation ($expectedPackage -> $targetPackage); copied instead")
             emit(rawText, cleaned, decodeMs, injected = false, targetPackage = targetPackage)
@@ -76,8 +75,8 @@ object TextInjector {
         }
 
         val snapshot = snapshotOf(node)
-        val cleaned = SpeechIntentResolver.resolve(
-            rawAsrText = rawText,
+        val cleaned = TranscriptCleaner.default.clean(
+            rawText = rawText,
             contextBeforeCursor = snapshot.beforeCursor.ifBlank { null }
         )
         if (cleaned.isBlank()) return Result.FAILED

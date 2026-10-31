@@ -53,7 +53,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.betterwhisper.core.audio.AudioCaptureEngine
 import com.betterwhisper.core.cleaner.TranscriptCleaner
-import com.betterwhisper.core.intent.SpeechIntentResolver
 import com.betterwhisper.core.transcribe.PhononTranscribeEngine
 import com.betterwhisper.feature.bubble.DictationEventBus
 import com.betterwhisper.feature.bubble.FlowAccessibilityService
@@ -288,11 +287,10 @@ fun SetupScreen() {
                             if (!PhononTranscribeEngine.instance.ensureLoaded(context.applicationContext)) {
                                 return@withContext null
                             }
-                            SpeechIntentResolver.init(context.applicationContext)
                             val startedAt = System.currentTimeMillis()
                             val raw = PhononTranscribeEngine.instance.transcribeBuffer(pcm)
-                            val cleaned = SpeechIntentResolver.resolve(raw, testInputText.ifBlank { null })
                             val ms = System.currentTimeMillis() - startedAt
+                            val cleaned = TranscriptCleaner.default.clean(raw, testInputText)
                             Triple(raw, cleaned, ms)
                         }
                         statusMessage = if (result == null) {
@@ -300,7 +298,7 @@ fun SetupScreen() {
                         } else if (result.second.isNotBlank()) {
                             val prefix = if (testInputText.isNotBlank() && !testInputText.endsWith(" ") && !result.second.startsWith(" ")) " " else ""
                             testInputText += prefix + result.second
-                            "Resolved in ${result.third} ms"
+                            "Wrote sentence in ${result.third} ms"
                         } else {
                             "No speech detected (${result.third} ms)"
                         }
