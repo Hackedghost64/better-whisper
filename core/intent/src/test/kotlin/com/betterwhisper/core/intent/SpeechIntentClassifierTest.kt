@@ -46,7 +46,16 @@ class SpeechIntentClassifierTest {
             "How about we go to the park at 6pm",
             "Call me tomorrow morning",
             "Send the report to Sarah and David",
-            "Hello world this is a test dictation"
+            "Hello world this is a test dictation",
+            // Additional colloquial guards identified by Devrith review:
+            "Can you make it to dinner tonight",
+            "Did you make that from scratch",
+            "Let us make that happen soon",
+            "Do you know what I mean right now",
+            "See what I mean by that",
+            "The server actually crashed this morning",
+            "Our team actually won the match",
+            "Please put me on that wait list"
         )
 
         for (sample in nonRepairSamples) {
