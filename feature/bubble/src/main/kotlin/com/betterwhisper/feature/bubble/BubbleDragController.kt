@@ -12,6 +12,10 @@ import kotlin.math.abs
  * re-evaluated the slop on every MOVE (and also treated ACTION_CANCEL as a
  * tap), which is what made the bubble occasionally jump into "mid-screen,
  * frozen, unresponsive" state during fast typing.
+ *
+ * Only [activePointerId] is followed, so a second finger landing on the bubble
+ * cannot teleport it, and a cancelled gesture always reports `cancelled = true`
+ * so the caller snaps back to a legal edge instead of starting dictation.
  */
 class BubbleDragController(
     private val touchSlopPx: Int,

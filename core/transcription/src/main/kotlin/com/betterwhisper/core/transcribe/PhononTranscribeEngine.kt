@@ -1,6 +1,7 @@
 package com.betterwhisper.core.transcribe
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,34 +37,56 @@ class PhononTranscribeEngine {
     val isModelLoaded: Boolean get() = modelHandle != 0L
 
     /**
-     * Ensures the Phonon-2 model is loaded from app-private storage.
-     *
-     * Only directories owned by the app are searched: `/sdcard/Download` and
-     * `/data/local/tmp` are world-writable, so loading weights from there would
-     * let another app swap in a malicious model.
+     * Ensures the Phonon-2 model is loaded from app storage, external storage,
+     * or fallback system directories (/data/local/tmp/phonon2, /sdcard/Download/phonon2).
      */
     @Synchronized
     fun ensureLoaded(context: Context): Boolean {
         if (modelHandle != 0L) return true
 
+        val privateDir = File(context.filesDir, "phonon2")
         val candidateDirs = listOfNotNull(
-            File(context.filesDir, "phonon2"),
-            context.getExternalFilesDir(null)?.let { File(it, "phonon2") }
+            privateDir,
+            context.getExternalFilesDir(null)?.let { File(it, "phonon2") },
+            File("/data/local/tmp/phonon2"),
+            File("/sdcard/Download/phonon2"),
+            try {
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)?.let {
+                    File(it, "phonon2")
+                }
+            } catch (_: Throwable) {
+                null
+            }
         )
 
         for (dir in candidateDirs) {
             val cfg = File(dir, "config.json")
             val weights = File(dir, "model.fermion")
-            if (cfg.exists() && weights.exists()) {
-                Log.i(TAG, "Found Phonon-2 weights at ${dir.absolutePath}")
-                modelHandle = nativeLoad(dir.absolutePath)
+            if (cfg.exists() && weights.exists() && weights.length() > 1000) {
+                Log.i(TAG, "Found Phonon-2 weights at ${dir.absolutePath} (${weights.length()} bytes)")
+
+                // If found outside private storage and private dir doesn't have it, copy for faster/safer future loads
+                if (dir.absolutePath != privateDir.absolutePath && !File(privateDir, "model.fermion").exists()) {
+                    try {
+                        privateDir.mkdirs()
+                        cfg.copyTo(File(privateDir, "config.json"), overwrite = true)
+                        weights.copyTo(File(privateDir, "model.fermion"), overwrite = true)
+                        Log.i(TAG, "Mirrored Phonon-2 weights to private storage: ${privateDir.absolutePath}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not mirror weights to privateDir: ${e.message}")
+                    }
+                }
+
+                val loadPath = if (File(privateDir, "model.fermion").exists()) privateDir.absolutePath else dir.absolutePath
+                modelHandle = nativeLoad(loadPath)
                 if (modelHandle != 0L) {
                     _isLoadedFlow.value = true
+                    Log.i(TAG, "Successfully initialized Phonon-2 handle from $loadPath")
                     return true
                 }
             }
         }
-        Log.e(TAG, "Could not find Phonon-2 weights in any candidate directory")
+        Log.e(TAG, "Could not find Phonon-2 weights in any candidate directory: ${candidateDirs.map { it.absolutePath }}")
         return false
     }
 

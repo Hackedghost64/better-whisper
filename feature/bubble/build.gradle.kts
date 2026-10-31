@@ -22,9 +22,9 @@ android {
 }
 
 dependencies {
-    implementation(project(":core-audio"))
-    implementation(project(":core-transcribe"))
-    implementation(project(":core-cleaner"))
+    implementation(project(":core:audio"))
+    implementation(project(":core:transcription"))
+    implementation(project(":core:text-cleaning"))
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")

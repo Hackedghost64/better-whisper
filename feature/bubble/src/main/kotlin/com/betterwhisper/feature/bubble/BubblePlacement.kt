@@ -8,7 +8,8 @@ package com.betterwhisper.feature.bubble
  *  - `y` grows **upward from the bottom edge** of the screen.
  *
  * Getting that wrong is what used to push the bubble off-screen when the IME
- * opened. Keeping the math here (no Android imports) makes it unit-testable.
+ * opened. Keeping the math here (no Android imports) makes it unit-testable,
+ * and it is the single source of truth for both docking and drag clamping.
  */
 data class BubbleViewport(
     val screenWidthPx: Int,

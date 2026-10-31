@@ -15,7 +15,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "better-whisper"
 include(":app")
-include(":feature-bubble")
-include(":core-audio")
-include(":core-transcribe")
-include(":core-cleaner")
+include(":feature:bubble")
+include(":core:audio")
+include(":core:transcription")
+include(":core:text-cleaning")

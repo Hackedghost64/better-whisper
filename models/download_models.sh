@@ -15,8 +15,8 @@ PHONON_ARCHIVE="phonon-2.bps.tar.zst"
 MODEL_DIR="${WEIGHTS_DIR}/phonon2"
 
 SDK_DIR="${BASE_DIR}/android-sdk/libphonon-1.1.0-android-arm64-v8a"
-TRANSCRIBE_JNI_DIR="${PROJECT_ROOT}/core-transcribe/src/main/jniLibs/arm64-v8a"
-CLEANER_JNI_DIR="${PROJECT_ROOT}/core-cleaner/src/main/jniLibs/arm64-v8a"
+TRANSCRIBE_JNI_DIR="${PROJECT_ROOT}/core/transcription/src/main/jniLibs/arm64-v8a"
+CLEANER_JNI_DIR="${PROJECT_ROOT}/core/text-cleaning/src/main/jniLibs/arm64-v8a"
 NDK_ABI="arm64-v8a"
 
 echo "=========================================================="
@@ -69,7 +69,7 @@ fi
 mkdir -p "${TRANSCRIBE_JNI_DIR}"
 cp "${SDK_DIR}/lib/libphonon.so" "${TRANSCRIBE_JNI_DIR}/libphonon.so"
 # Keep the checked-in header identical to the ABI of the shipped .so.
-cp "${SDK_DIR}/include/phonon.h" "${PROJECT_ROOT}/core-transcribe/src/main/cpp/phonon.h"
+cp "${SDK_DIR}/include/phonon.h" "${PROJECT_ROOT}/core/transcription/src/main/cpp/phonon.h"
 
 # 3. Rust cleaner -----------------------------------------------------------
 if command -v cargo >/dev/null 2>&1; then
@@ -79,12 +79,12 @@ if command -v cargo >/dev/null 2>&1; then
     if [ -x "${LINKER}" ]; then
         rustup target add aarch64-linux-android >/dev/null 2>&1 || true
         (
-            cd "${PROJECT_ROOT}/core"
+            cd "${PROJECT_ROOT}/core/text-cleaning/engine"
             CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${LINKER}" \
                 cargo build --release --target aarch64-linux-android
         )
         mkdir -p "${CLEANER_JNI_DIR}"
-        cp "${PROJECT_ROOT}/core/target/aarch64-linux-android/release/libbetter_whisper_core.so" \
+        cp "${PROJECT_ROOT}/core/text-cleaning/engine/target/aarch64-linux-android/release/libbetter_whisper_core.so" \
             "${CLEANER_JNI_DIR}/libbetter_whisper_core.so"
     else
         echo "WARNING: NDK clang not found at ${LINKER}; skipping Rust cross-build." >&2
@@ -97,10 +97,11 @@ echo
 echo "=========================================================="
 echo " Assets ready."
 echo
-echo " Next: install the app, then push the weights to app-private"
-echo " external storage (no root needed):"
+echo " Next: install the app, then copy the weights into app-private"
+echo " storage (no root needed, survives reboots):"
 echo
 echo "   adb install -r app/build/outputs/apk/debug/app-debug.apk"
-echo "   adb shell mkdir -p /sdcard/Android/data/com.betterwhisper/files/phonon2"
-echo "   adb push ${MODEL_DIR}/. /sdcard/Android/data/com.betterwhisper/files/phonon2/"
+echo "   adb push ${MODEL_DIR}/. /data/local/tmp/phonon2/"
+echo "   adb shell run-as com.betterwhisper mkdir -p files/phonon2"
+echo "   adb shell run-as com.betterwhisper cp -r /data/local/tmp/phonon2/. files/phonon2/"
 echo "=========================================================="

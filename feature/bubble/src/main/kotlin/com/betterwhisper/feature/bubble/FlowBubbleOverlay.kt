@@ -27,6 +27,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 /**
  * The floating Flow bubble.
@@ -56,6 +57,13 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
     private val bubbleHeightPx = (52 * density).toInt()
     private val topGuardPx = (8 * density).toInt()
     private val bottomGuardPx = (96 * density).toInt()
+
+    /**
+     * The IME is measured every accessibility event, and its window bounds
+     * animate while the keyboard opens. Ignoring changes smaller than this
+     * keeps the bubble from vibrating with each animation frame.
+     */
+    private val imeJitterPx = (10 * density).toInt()
 
     private var viewport = BubbleViewport(0, 0, sideMarginPx, topGuardPx, bottomGuardPx)
 
@@ -106,29 +114,37 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
     fun isBusy(): Boolean = isUserInteracting || isSnapping || mode != Mode.COLLAPSED
 
     fun show(imeHeightPx: Int = 0) {
-        if (currentImeHeightPx != imeHeightPx) {
-            currentImeHeightPx = imeHeightPx.coerceAtLeast(0)
+        val newImeHeight = imeHeightPx.coerceAtLeast(0)
+        if (abs(newImeHeight - currentImeHeightPx) > imeJitterPx) {
+            currentImeHeightPx = newImeHeight
         }
         refreshViewport()
 
         if (mode != Mode.COLLAPSED) {
+            ensureAttached()
             updateKeyboardHeight(currentImeHeightPx)
             return
         }
         if (isUserInteracting || isSnapping) return
 
+        val targetX = viewport.dockedX(isDockedOnRight, collapsedWidthPx)
         val targetY = viewport.clampY(preferredUserY, currentImeHeightPx, bubbleHeightPx)
         preferredUserY = targetY
-        layoutParams.x = viewport.dockedX(isDockedOnRight, collapsedWidthPx)
+
+        // Do not touch the window unless it actually has to move or appear.
+        // Calling updateViewLayout on every accessibility event is what made
+        // the bubble flicker while typing.
+        val moved = layoutParams.x != targetX || layoutParams.y != targetY
+        layoutParams.x = targetX
         layoutParams.y = targetY
 
         ensureAttached()
-        safeUpdateLayout()
+        if (moved) safeUpdateLayout()
     }
 
     fun updateKeyboardHeight(imeHeightPx: Int) {
         val newHeight = imeHeightPx.coerceAtLeast(0)
-        if (currentImeHeightPx == newHeight) return
+        if (abs(newHeight - currentImeHeightPx) <= imeJitterPx) return
         currentImeHeightPx = newHeight
         if (bubbleView == null) return
 
@@ -148,6 +164,7 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
         if (isBusy()) return false
         cancelAnimations()
         mode = Mode.COLLAPSED
+        Log.i(TAG, "Bubble hidden (no editable field or keyboard)")
         detachView()
         return true
     }
@@ -204,8 +221,11 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
     }
 
     private fun ensureAttached() {
-        val current = bubbleView
-        if (current != null && attached && current.isAttachedToWindow) return
+        // `View.isAttachedToWindow` is false between addView() and the first
+        // traversal. Polling it here used to tear down and re-add a brand-new
+        // window on every accessibility event, which is exactly what made the
+        // bubble flicker. Track attach state with a listener instead.
+        if (bubbleView != null && attached) return
         detachView()
 
         val view = LayoutInflater.from(service).inflate(R.layout.layout_flow_bubble, null)
@@ -236,10 +256,32 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
         btnClose?.setOnClickListener { cancelAndCollapse() }
         btnDone?.setOnClickListener { finishAndInject() }
 
+        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                if (bubbleView === v) attached = true
+            }
+
+            override fun onViewDetachedFromWindow(v: View) {
+                // The system removed the window (or we did). Drop all view
+                // references so the next show() rebuilds instead of animating
+                // a dead token.
+                if (bubbleView === v) {
+                    attached = false
+                    bubbleView = null
+                    containerCollapsed = null
+                    containerExpanded = null
+                    btnClose = null
+                    btnDone = null
+                    visualizerBars = emptyList()
+                }
+            }
+        })
+
         bubbleView = view
         try {
             windowManager.addView(view, layoutParams)
             attached = true
+            Log.i(TAG, "Bubble attached at x=${layoutParams.x}, y=${layoutParams.y}")
         } catch (t: RuntimeException) {
             Log.e(TAG, "Unable to attach Flow bubble: ${t.message}", t)
             bubbleView = null
@@ -251,14 +293,18 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
 
     private fun onDrag(dx: Int, dy: Int) {
         if (bubbleView == null) return
-        // The window is BOTTOM-gravity, so `y` grows upward: a finger moving
-        // down (positive dy) must *decrease* y. The old code got this right
-        // only because it inverted rawY before reporting the delta.
-        val newX = viewport.clampX(dragStartX + dx, collapsedWidthPx)
         val newY = viewport.clampY(dragStartY - dy, currentImeHeightPx, bubbleHeightPx)
-        layoutParams.x = newX
         layoutParams.y = newY
         preferredUserY = newY
+
+        // Bubble stays strictly on the sides (can be moved up or down, but never parks in the middle).
+        // Only flip to the other side if the drag crosses the center threshold.
+        val currentTouchX = dragStartX + dx
+        val shouldDockRight = (currentTouchX + collapsedWidthPx / 2) >= (viewport.screenWidthPx / 2)
+        if (shouldDockRight != isDockedOnRight) {
+            isDockedOnRight = shouldDockRight
+            layoutParams.x = viewport.dockedX(isDockedOnRight, collapsedWidthPx)
+        }
         safeUpdateLayout()
     }
 
@@ -271,8 +317,6 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
             return
         }
 
-        // A drag, a multi-touch handoff, or an IME window change cancelled the
-        // gesture. Snap back to a legal edge instead of leaving it mid-screen.
         snapToEdge(SNAP_DURATION_MS)
     }
 
@@ -353,10 +397,9 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
 
     private fun safeUpdateLayout() {
         val view = bubbleView ?: return
-        if (!view.isAttachedToWindow) {
-            attached = false
-            return
-        }
+        // Do not use isAttachedToWindow here: it is false until the first
+        // traversal, and treating that as "detached" caused re-add churn.
+        if (!attached) return
         try {
             windowManager.updateViewLayout(view, layoutParams)
         } catch (t: RuntimeException) {
@@ -371,9 +414,10 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
     private fun detachView() {
         val view = bubbleView ?: return
         try {
-            if (view.isAttachedToWindow) {
-                windowManager.removeView(view)
-            }
+            // Always attempt the removal. `isAttachedToWindow` can still be
+            // false for a window that addView() has already registered, and
+            // skipping the removal would leak that window.
+            windowManager.removeView(view)
         } catch (t: RuntimeException) {
             Log.w(TAG, "removeView failed: ${t.message}")
         }
@@ -390,14 +434,14 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
         if (mode != Mode.COLLAPSED || bubbleView == null) return
         cancelAnimations()
         mode = Mode.RECORDING
-        // Remember where the user started dictating. If they switch apps while
-        // the microphone is open we must not type into the new app.
         recordingPackage = service.currentFocusPackage()
-        showExpandedUi()
 
         val targetX = viewport.dockedX(isDockedOnRight, expandedWidthPx)
         val targetY = viewport.clampY(preferredUserY, currentImeHeightPx, bubbleHeightPx)
-        animateSnap(targetX, targetY, SNAP_DURATION_MS)
+        layoutParams.x = targetX
+        layoutParams.y = targetY
+        safeUpdateLayout()
+        showExpandedUi()
 
         if (!audioEngine.startCapture()) {
             Log.e(TAG, "Failed to start audio capture")
@@ -415,32 +459,44 @@ class FlowBubbleOverlay(private val service: FlowAccessibilityService) {
 
     private fun cancelAndCollapse() {
         if (mode == Mode.COLLAPSED) return
+        cancelAnimations()
         mode = Mode.COLLAPSED
         recordingPackage = null
         visualizerJob?.cancel()
         visualizerJob = null
         audioEngine.stopAndGetPcm()
+
+        // Dock strictly to side edge before showing collapsed UI (never jumps to middle)
+        val targetX = viewport.dockedX(isDockedOnRight, collapsedWidthPx)
+        val targetY = viewport.clampY(preferredUserY, currentImeHeightPx, bubbleHeightPx)
+        layoutParams.x = targetX
+        layoutParams.y = targetY
+        safeUpdateLayout()
+
         showCollapsedUi()
-        snapToEdge(SNAP_DURATION_MS)
         service.onDictationFinished()
     }
 
     private fun finishAndInject() {
         if (mode != Mode.RECORDING) return
+        cancelAnimations()
         mode = Mode.TRANSCRIBING
         visualizerJob?.cancel()
         visualizerJob = null
 
-        // Snapshot the target now: the user may switch apps while the model
-        // decodes, and the transcript must land where dictation started.
         val targetPackage = recordingPackage
         recordingPackage = null
 
         val pcmSamples = audioEngine.stopAndGetPcm()
+
+        // Dock strictly to side edge before showing collapsed UI (never jumps to middle)
+        val targetX = viewport.dockedX(isDockedOnRight, collapsedWidthPx)
+        val targetY = viewport.clampY(preferredUserY, currentImeHeightPx, bubbleHeightPx)
+        layoutParams.x = targetX
+        layoutParams.y = targetY
+        safeUpdateLayout()
+
         showCollapsedUi()
-        // The window is visually collapsed now, so dock with the collapsed
-        // width (using the expanded width left it inset from the edge).
-        snapToEdge(SNAP_DURATION_MS, collapsedWidthPx)
 
         if (pcmSamples.isEmpty()) {
             finishTranscription()

@@ -31,3 +31,9 @@ local.properties
 keystore.properties
 *.jks
 *.keystore
+
+# Backward compatibility symlinks for open IDE tabs
+core-audio
+core-cleaner
+core-transcribe
+feature-bubble

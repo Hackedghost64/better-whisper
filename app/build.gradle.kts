@@ -70,10 +70,10 @@ android {
 }
 
 dependencies {
-    implementation(project(":feature-bubble"))
-    implementation(project(":core-audio"))
-    implementation(project(":core-transcribe"))
-    implementation(project(":core-cleaner"))
+    implementation(project(":feature:bubble"))
+    implementation(project(":core:audio"))
+    implementation(project(":core:transcription"))
+    implementation(project(":core:text-cleaning"))
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")

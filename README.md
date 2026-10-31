@@ -25,32 +25,47 @@ transcribes speech with **Phonon-2** and injects clean text into any app.
 
 ```text
 better-whisper/
-├── app/                       # Compose setup screen + permissions UX
+├── app/                          # Android shell: Compose setup screen, permissions, entry point
 │   └── src/main/kotlin/com/betterwhisper/
 │       ├── MainActivity.kt
 │       ├── ui/Theme.kt
 │       ├── ui/SetupScreen.kt
 │       ├── ui/PermissionItem.kt
 │       └── util/Permissions.kt
-├── feature-bubble/            # Floating bubble + accessibility service
-│   └── src/main/kotlin/com/betterwhisper/feature/bubble/
-│       ├── FlowBubbleOverlay.kt      # window, mode state machine, snap animation
-│       ├── BubblePlacement.kt        # pure geometry (unit tested)
-│       ├── BubbleDragController.kt   # latched touch state machine (unit tested)
-│       ├── FlowAccessibilityService.kt
-│       ├── TextInjector.kt           # field resolution + safe insertion
-│       └── DictationEventBus.kt
-├── core-audio/                # 16 kHz AudioRecord capture + RMS visualizer
-├── core-transcribe/           # JNI bridge to libphonon.so
-├── core-cleaner/              # JNI bridge + pure-Kotlin fallback cleaner
-│   └── src/main/kotlin/com/betterwhisper/core/cleaner/
-│       ├── FlowTextCleaner.kt        # reference rules (unit tested)
-│       └── TranscriptCleaner.kt
-├── core/                      # Rust C-ABI cleaner (release fast path)
-│   └── src/{cleaner,dictionary,vad,ffi}.rs
-├── models/                    # download/setup script + local assets
-└── scripts/benchmark_flow.py  # functional + latency suite for the Rust core
+│
+├── core/                         # Reusable, UI-free engine modules
+│   ├── audio/                    # Capture: 16 kHz AudioRecord + RMS level for the visualizer
+│   ├── transcription/            # Speech → text: JNI bridge to libphonon.so (Phonon-2)
+│   └── text-cleaning/            # Text → clean text: Kotlin reference + JNI bridge
+│       ├── src/main/kotlin/com/betterwhisper/core/cleaner/
+│       │   ├── FlowTextCleaner.kt    # reference rules (unit tested)
+│       │   └── TranscriptCleaner.kt
+│       └── engine/                   # Rust C-ABI fast path (release build)
+│           └── src/{cleaner,dictionary,vad,ffi}.rs
+│
+├── feature/                      # User-facing features built on the core modules
+│   └── bubble/                   # Floating bubble + accessibility service
+│       └── src/main/kotlin/com/betterwhisper/feature/bubble/
+│           ├── FlowBubbleOverlay.kt      # window, mode state machine, snap animation
+│           ├── BubblePlacement.kt        # pure geometry (unit tested)
+│           ├── BubbleDragController.kt   # latched touch state machine (unit tested)
+│           ├── FlowAccessibilityService.kt
+│           ├── TextInjector.kt           # field resolution + safe insertion
+│           └── DictationEventBus.kt
+│
+├── models/                       # download/setup script + local assets
+└── scripts/benchmark_flow.py     # functional + latency suite for the Rust engine
 ```
+
+### Modules
+
+| Module | What it does | Depends on |
+| :--- | :--- | :--- |
+| `:app` | UI shell, setup/permission flow, app entry point | `:feature:bubble`, all `:core:*` |
+| `:core:audio` | Records 16 kHz mono PCM and exposes an RMS level for the visualizer | — |
+| `:core:transcription` | Wraps Phonon-2 in `libphonon.so` behind a Kotlin API | — |
+| `:core:text-cleaning` | Removes fillers/stutters, fixes casing; Kotlin + Rust parity | — |
+| `:feature:bubble` | Drives capture → transcribe → clean → inject from a floating bubble | all `:core:*` |
 
 ### Native libraries
 
@@ -59,15 +74,16 @@ to the right module:
 
 | Library | Destination |
 | :--- | :--- |
-| `libphonon.so` | `core-transcribe/src/main/jniLibs/arm64-v8a/` |
-| `libbetter_whisper_core.so` | `core-cleaner/src/main/jniLibs/arm64-v8a/` |
+| `libphonon.so` | `core/transcription/src/main/jniLibs/arm64-v8a/` |
+| `libbetter_whisper_core.so` | `core/text-cleaning/src/main/jniLibs/arm64-v8a/` |
 
 ---
 
 ## Text cleaning
 
 The cleaner runs twice-over: `FlowTextCleaner.kt` is the readable reference and
-`core/src/cleaner.rs` is the fast path; both implement the same rules.
+`core/text-cleaning/engine/src/cleaner.rs` is the fast path; both implement the
+same rules.
 
 - **Disfluencies** (`um`, `uh`, `er`, `ah`, `hmm`) are always removed.
 - **Empty discourse markers** (`basically`, `literally`) are removed.
@@ -120,8 +136,8 @@ bash models/download_models.sh   # weights + libphonon.so + Rust .so
 ### 2. Verify the Rust cleaner
 
 ```bash
-cd core && cargo test && cargo build --release
-cd .. && python3 scripts/benchmark_flow.py
+cd core/text-cleaning/engine && cargo test && cargo build --release
+cd - && python3 scripts/benchmark_flow.py
 ```
 
 The benchmark runs 10 functional cases and a 10,000-iteration latency loop.
@@ -137,12 +153,13 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ### 4. Put the model on the device
 
-The engine only reads app-private storage, so push the weights to the app's
-external files dir (no root required):
+The engine only reads app-private storage, so copy the weights into the app's
+internal files dir (no root required):
 
 ```bash
-adb shell mkdir -p /sdcard/Android/data/com.betterwhisper/files/phonon2
-adb push models/weights/phonon2/. /sdcard/Android/data/com.betterwhisper/files/phonon2/
+adb push models/weights/phonon2/. /data/local/tmp/phonon2/
+adb shell run-as com.betterwhisper mkdir -p files/phonon2
+adb shell run-as com.betterwhisper cp -r /data/local/tmp/phonon2/. files/phonon2/
 ```
 
 ### 5. Grant permissions
@@ -162,9 +179,9 @@ cancels.
 ## Tests
 
 ```bash
-cd core && cargo test                             # Rust rules + FFI
-./gradlew :core-cleaner:testDebugUnitTest         # Kotlin cleaner parity
-./gradlew :feature-bubble:testDebugUnitTest       # bubble placement maths
+cd core/text-cleaning/engine && cargo test       # Rust rules + FFI
+./gradlew :core:text-cleaning:testDebugUnitTest   # Kotlin cleaner parity
+./gradlew :feature:bubble:testDebugUnitTest       # bubble placement maths
 ./gradlew :app:assembleDebug                      # full Android build
 ```
 

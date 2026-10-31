@@ -13,11 +13,14 @@ import time
 # Locate the compiled Rust core shared library
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-LIB_PATH = os.path.join(PROJECT_ROOT, "core", "target", "release", "libbetter_whisper_core.so")
+LIB_PATH = os.path.join(
+    PROJECT_ROOT, "core", "text-cleaning", "engine", "target", "release",
+    "libbetter_whisper_core.so",
+)
 
 if not os.path.exists(LIB_PATH):
     print(f"Error: Shared library not found at {LIB_PATH}")
-    print("Please run: cargo build --release --manifest-path core/Cargo.toml")
+    print("Please run: cargo build --release --manifest-path core/text-cleaning/engine/Cargo.toml")
     sys.exit(1)
 
 # Load C-ABI functions
