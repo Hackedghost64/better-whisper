@@ -78,6 +78,7 @@ dependencies {
     implementation(project(":core:audio"))
     implementation(project(":core:transcription"))
     implementation(project(":core:text-cleaning"))
+    implementation(project(":core:intent"))
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")

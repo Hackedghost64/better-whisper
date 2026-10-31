@@ -26,6 +26,7 @@ local.properties
 # Tool scratch state
 .devrith/
 .idea/
+.vscode/
 .DS_Store
 
 # Release signing secrets
